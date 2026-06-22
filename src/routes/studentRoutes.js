@@ -1,0 +1,79 @@
+const express = require("express");
+const router = express.Router();
+
+const upload = require("../middlewares/uploads");
+const { validateSchema } = require("../middlewares/validate");
+const protectStudent = require("../middlewares/protectStudent");
+const protectInstitute = require("../middlewares/protectInstitute");
+const protectSuperAdmin = require("../middlewares/protectSuperAdmin");
+const authorizeRoles = require("../middlewares/authorizeRoles");
+
+const {
+  createStudentSchema,
+  updateStudentSchema,
+  updateMeSchema,
+  loginSchema,
+  changePasswordSchema,
+} = require("../validation/studentValidation");
+
+const {
+  create,
+  getAll,
+  getOne,
+  update,
+  remove,
+  toggleStatus,
+  login,
+  logout,
+  getMe,
+  updateMe,
+  changePassword,
+  bulkUpload,
+} = require("../controller/studentController");
+
+// ── Public ────────────────────────────────────────────────────────────────────
+router.post("/login", validateSchema(loginSchema), login);
+
+// ── Student (self) ────────────────────────────────────────────────────────────
+router.get("/me", protectStudent, authorizeRoles("student"), getMe);
+router.post("/logout", protectStudent, authorizeRoles("student"), logout);
+router.put(
+  "/me",
+  protectStudent,
+  authorizeRoles("student"),
+  upload.single("studentPhoto"),
+  validateSchema(updateMeSchema),
+  updateMe,
+);
+router.put(
+  "/me/change-password",
+  protectStudent,
+  authorizeRoles("student"),
+  validateSchema(changePasswordSchema),
+  changePassword,
+);
+
+// ── College ───────────────────────────────────────────────────────────────────
+router.post(
+  "/",
+  protectInstitute,
+  authorizeRoles("institute"),
+  upload.single("studentPhoto"),
+  validateSchema(createStudentSchema),
+  create,
+);
+router.get("/", protectInstitute, authorizeRoles("institute"), getAll);
+router.get("/:id", protectInstitute, authorizeRoles("institute"), getOne);
+router.put(
+  "/:id",
+  protectInstitute,
+  authorizeRoles("institute"),
+  upload.single("studentPhoto"),
+  validateSchema(updateStudentSchema),
+  update,
+);
+router.delete("/:id", protectInstitute, authorizeRoles("institute"), remove);
+router.put("/:id/toggle-status", protectInstitute, authorizeRoles("institute"), toggleStatus);
+router.post("/bulk-upload", protectInstitute, authorizeRoles("institute"), upload.single("studentExcel"), bulkUpload);
+
+module.exports = router;

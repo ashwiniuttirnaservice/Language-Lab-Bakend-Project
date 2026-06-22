@@ -1,0 +1,169 @@
+const crypto = require("crypto");
+
+const License = require("../models/License");
+const asyncHandler = require("../middlewares/asyncHandler");
+const { sendResponse, sendError } = require("../utils/apiResponse");
+
+function generateLicenseKey(instituteId) {
+  const payload = `${instituteId}-${Date.now()}-${crypto.randomBytes(8).toString("hex")}`;
+  const hash = crypto
+    .createHmac("sha256", process.env.JWT_SECRET)
+    .update(payload)
+    .digest("hex")
+    .toUpperCase()
+    .slice(0, 32);
+  return hash.match(/.{4}/g).join("-"); // XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX
+}
+
+function generateLicenseCode() {
+  return crypto.randomBytes(4).toString("hex").toUpperCase(); // e.g. 3FA2C1D0
+}
+
+// POST /license/generate
+const generate = asyncHandler(async (req, res) => {
+  const { institute_id, total_seats, duration, start_date } = req.body;
+
+  const startDate = start_date ? new Date(start_date) : new Date();
+  const expiryDate = new Date(startDate);
+  expiryDate.setDate(expiryDate.getDate() + duration);
+
+  const license = await License.create({
+    license_key: generateLicenseKey(institute_id),
+    license_code: generateLicenseCode(),
+    institute_id,
+    purchased_by: req.admin._id,
+    total_seats: total_seats ?? 5,
+    duration,
+    start_date: startDate,
+    expiry_date: expiryDate,
+  });
+
+  return sendResponse(
+    res,
+    201,
+    true,
+    "License generated successfully.",
+    license,
+  );
+});
+
+// GET /license
+const getAll = asyncHandler(async (req, res) => {
+  const licenses = await License.find()
+    .populate("institute_id", "name")
+    .populate("purchased_by", "full_name email")
+    .sort({ createdAt: -1 });
+
+  return sendResponse(
+    res,
+    200,
+    true,
+    "Licenses fetched successfully.",
+    licenses,
+  );
+});
+
+// GET /license/:id
+const getOne = asyncHandler(async (req, res) => {
+  const license = await License.findById(req.params.id)
+    .populate("institute_id", "name")
+    .populate("purchased_by", "full_name email");
+
+  if (!license) return sendError(res, 404, false, "License not found.");
+
+  return sendResponse(res, 200, true, "License fetched successfully.", license);
+});
+
+// PUT /license/:id/activate
+const activate = asyncHandler(async (req, res) => {
+  const license = await License.findByIdAndUpdate(
+    req.params.id,
+    { status: "active" },
+    { new: true },
+  );
+
+  if (!license) return sendError(res, 404, false, "License not found.");
+
+  return sendResponse(
+    res,
+    200,
+    true,
+    "License activated successfully.",
+    license,
+  );
+});
+
+// PUT /license/:id/suspend
+const suspend = asyncHandler(async (req, res) => {
+  const license = await License.findByIdAndUpdate(
+    req.params.id,
+    { status: "suspended" },
+    { new: true },
+  );
+
+  if (!license) return sendError(res, 404, false, "License not found.");
+
+  return sendResponse(
+    res,
+    200,
+    true,
+    "License suspended successfully.",
+    license,
+  );
+});
+
+// PUT /license/:id/expire
+const expire = asyncHandler(async (req, res) => {
+  const license = await License.findByIdAndUpdate(
+    req.params.id,
+    { status: "expired" },
+    { new: true },
+  );
+
+  if (!license) return sendError(res, 404, false, "License not found.");
+
+  return sendResponse(res, 200, true, "License expired successfully.", license);
+});
+
+// PUT /license/:id/seats
+const updateSeats = asyncHandler(async (req, res) => {
+  const { total_seats } = req.body;
+
+  const license = await License.findById(req.params.id);
+
+  if (!license) return sendError(res, 404, false, "License not found.");
+
+  if (total_seats < license.active_sessions) {
+    return sendError(
+      res,
+      400,
+      false,
+      `Cannot reduce seats below active sessions (${license.active_sessions}).`,
+    );
+  }
+
+  license.total_seats = total_seats;
+  await license.save();
+
+  return sendResponse(res, 200, true, "Seats updated successfully.", license);
+});
+
+// DELETE /license/:id
+const remove = asyncHandler(async (req, res) => {
+  const license = await License.findByIdAndDelete(req.params.id);
+
+  if (!license) return sendError(res, 404, false, "License not found.");
+
+  return sendResponse(res, 200, true, "License deleted successfully.");
+});
+
+module.exports = {
+  generate,
+  getAll,
+  getOne,
+  activate,
+  suspend,
+  expire,
+  updateSeats,
+  remove,
+};
