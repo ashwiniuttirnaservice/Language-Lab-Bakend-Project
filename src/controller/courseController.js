@@ -44,7 +44,7 @@ const update = asyncHandler(async (req, res) => {
   const course = await Course.findById(req.params.id);
   if (!course) return sendError(res, 404, false, "Course not found.");
 
-  const { course_name, description, level, language, duration_days, is_active } = req.body;
+  const { course_name, description, level, language, duration_days, is_active, topic_ids } = req.body;
 
   if (course_name !== undefined) course.course_name = course_name;
   if (description !== undefined) course.description = description;
@@ -52,6 +52,11 @@ const update = asyncHandler(async (req, res) => {
   if (language !== undefined) course.language = language;
   if (duration_days !== undefined) course.duration_days = duration_days;
   if (is_active !== undefined) course.is_active = is_active;
+
+  // Assign topics to this course — replaces the full topic_ids[] array
+  if (topic_ids !== undefined) {
+    course.topic_ids = Array.isArray(topic_ids) ? topic_ids : [topic_ids];
+  }
 
   await course.save();
 

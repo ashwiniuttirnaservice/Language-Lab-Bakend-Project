@@ -31,5 +31,6 @@ const CourseSchema = new Schema(
 
 CourseSchema.index({ course_code: 1 });
 CourseSchema.index({ created_by: 1 });
+CourseSchema.index({ topic_ids: 1 });
 
 module.exports = model("Course", CourseSchema);

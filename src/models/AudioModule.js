@@ -47,8 +47,8 @@ const AudioModuleSchema = new Schema(
     module_type: { type: String, default: "audio", immutable: true },
 
     audio: {
-      url: { type: String, required: true },
-      duration_sec: { type: Number, required: true },
+      url: { type: String },
+      duration_sec: { type: Number },
       type: { type: String, enum: ["mp3", "wav", "ogg"], default: "mp3" },
       size_mb: { type: Number },
       transcript: { type: String },
