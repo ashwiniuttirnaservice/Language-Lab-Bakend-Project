@@ -1,15 +1,16 @@
 const { Types } = require("mongoose");
 
 const Topic = require("../models/Topic");
+const Course = require("../models/Course");
 const asyncHandler = require("../middlewares/asyncHandler");
 const { sendResponse, sendError } = require("../utils/apiResponse");
 
-// POST /topic
+// POST /topic  — Topic is standalone, no course_id needed here
+// Assigning topics to courses is done via PUT /super-admin/course/:id (topic_ids[])
 const create = asyncHandler(async (req, res) => {
-  const { course_id, title, description, order } = req.body;
+  const { title, description, order } = req.body;
 
   const topic = await Topic.create({
-    course_id,
     title,
     description,
     order: order ?? 0,
@@ -28,8 +29,32 @@ const getAll = asyncHandler(async (req, res) => {
   } else if (req.student) {
     const Institute = require("../models/Institute");
     const institute = await Institute.findById(req.student.institute_id).select("course_id");
+
     if (institute?.course_id?.length) {
-      matchStage.course_id = { $in: institute.course_id };
+      // Get all courses for this institute, collect topic_ids from each
+      const courses = await Course.find(
+        { _id: { $in: institute.course_id }, is_active: true },
+        { topic_ids: 1 },
+      ).lean();
+
+      // Flatten all topic_ids arrays + deduplicate via Set
+      const seen = new Set();
+      const allTopicIds = [];
+      for (const c of courses) {
+        for (const id of c.topic_ids) {
+          const key = id.toString();
+          if (!seen.has(key)) {
+            seen.add(key);
+            allTopicIds.push(new Types.ObjectId(key));
+          }
+        }
+      }
+
+      if (!allTopicIds.length) {
+        return sendResponse(res, 200, true, "Topics fetched successfully.", []);
+      }
+
+      matchStage._id = { $in: allTopicIds };
     }
   }
 

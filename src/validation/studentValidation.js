@@ -33,7 +33,6 @@ const updateMeSchema = Joi.object({
 
 const loginSchema = Joi.object({
   enrollment_no: Joi.string().trim().required(),
-  password: Joi.string().required(),
 });
 
 const changePasswordSchema = Joi.object({

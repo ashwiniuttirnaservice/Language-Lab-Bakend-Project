@@ -102,7 +102,24 @@ const getAll = asyncHandler(async (req, res) => {
       },
     },
     { $unwind: { path: "$institute", preserveNullAndEmptyArrays: true } },
-    { $project: { password: 0 } },
+    {
+      $addFields: {
+        // Reconstruct the plain login password: institute_code + enrollment_no (hyphens stripped)
+        login_password: {
+          $concat: [
+            "$institute.institute_code",
+            {
+              $reduce: {
+                input: { $split: ["$enrollment_no", "-"] },
+                initialValue: "",
+                in: { $concat: ["$$value", "$$this"] },
+              },
+            },
+          ],
+        },
+      },
+    },
+    { $unset: "password" },
   ]);
 
   return sendResponse(
@@ -219,15 +236,12 @@ const toggleStatus = asyncHandler(async (req, res) => {
 
 // ── Student: login (checks license seats) ────────────────────────────────────
 const login = asyncHandler(async (req, res) => {
-  const { enrollment_no, password } = req.body;
+  const { enrollment_no } = req.body;
 
   if (!enrollment_no) return sendError(res, 400, false, "enrollment_no is required.");
 
-  const student = await Student.findOne({ enrollment_no }).select("+password");
+  const student = await Student.findOne({ enrollment_no });
   if (!student) return sendError(res, 401, false, "No account found with this enrollment number.");
-
-  const isMatch = await bcrypt.compare(password, student.password);
-  if (!isMatch) return sendError(res, 401, false, "Incorrect password. Please try again.");
 
   if (!student.is_active || student.status !== "active")
     return sendError(res, 403, false, "Your account has been suspended. Contact your institute.");

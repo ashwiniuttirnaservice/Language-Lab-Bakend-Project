@@ -15,7 +15,11 @@ const wordSchema = new Schema(
     image_url: { type: String },
     synonyms: [String],
     antonyms: [String],
-    difficulty: { type: String, enum: ["easy", "medium", "hard"], default: "easy" },
+    difficulty: {
+      type: String,
+      enum: ["easy", "medium", "hard"],
+      default: "easy",
+    },
   },
   { _id: false },
 );
@@ -39,20 +43,28 @@ const questionSchema = new Schema(
 const VideoModuleSchema = new Schema(
   {
     topic_id: { type: Schema.Types.ObjectId, ref: "Topic", required: true },
-    sub_topic_id: { type: Schema.Types.ObjectId, ref: "SubTopic", required: true },
+    sub_topic_id: {
+      type: Schema.Types.ObjectId,
+      ref: "SubTopic",
+      required: true,
+    },
     title: { type: String, required: true, trim: true },
     description: { type: String },
     order: { type: Number, default: 0 },
     module_type: { type: String, default: "video", immutable: true },
 
     video: {
-      url: { type: String, required: true },
-      duration_sec: { type: Number, required: true },
+      url: { type: String },
+      duration_sec: { type: Number },
       thumbnail_url: { type: String },
       transcript: { type: String },
       format: { type: String, enum: ["mp4", "webm"], default: "mp4" },
       size_mb: { type: Number },
-      speed: { type: String, enum: ["slow", "normal", "fast"], default: "normal" },
+      speed: {
+        type: String,
+        enum: ["slow", "normal", "fast"],
+        default: "normal",
+      },
     },
 
     subtitle: [

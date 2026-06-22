@@ -7,7 +7,8 @@ const StudentSchema = new Schema(
     full_name: { type: String, required: true, trim: true },
     // email is optional — login uses enrollment_no, not email
     email: { type: String, unique: true, sparse: true, lowercase: true },
-    password: { type: String, required: true },
+    // password not required — login is enrollment_no ONLY (no password check)
+    password: { type: String },
     role: { type: String, default: "student", immutable: true },
     phone: { type: String },
     profilePhoto: { type: String },
