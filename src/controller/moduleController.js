@@ -1,5 +1,4 @@
-const { Types } = require("mongoose");
-
+const fs = require("fs");
 const VideoModule = require("../models/VideoModule");
 const AudioModule = require("../models/AudioModule");
 const TextModule = require("../models/TextModule");
@@ -24,7 +23,11 @@ const FOLDER_MAP = {
 
 const parseJsonField = (value) => {
   if (typeof value === "string") {
-    try { return JSON.parse(value); } catch { return value; }
+    try {
+      return JSON.parse(value);
+    } catch {
+      return value;
+    }
   }
   return value;
 };
@@ -38,9 +41,11 @@ const create = asyncHandler(async (req, res) => {
   const data = { ...req.body };
 
   // Parse JSON string fields (sent as strings in multipart/form-data)
-  ["questions", "words", "video", "audio", "content", "subtitle"].forEach((field) => {
-    if (data[field]) data[field] = parseJsonField(data[field]);
-  });
+  ["questions", "words", "video", "audio", "content", "subtitle"].forEach(
+    (field) => {
+      if (data[field]) data[field] = parseJsonField(data[field]);
+    },
+  );
 
   // Handle file upload for video/audio
   if (req.file && FOLDER_MAP[type]) {
@@ -49,6 +54,7 @@ const create = asyncHandler(async (req, res) => {
       fileName: `${type}_${Date.now()}`,
       folderName: FOLDER_MAP[type],
     });
+    fs.unlink(req.file.path, () => {});
     const url = uploaded?.cdnUrl || uploaded?.fullS3URL || "";
 
     if (type === "video") {
@@ -62,7 +68,13 @@ const create = asyncHandler(async (req, res) => {
 
   const module = await Model.create(data);
 
-  return sendResponse(res, 201, true, `${type} module created successfully.`, module);
+  return sendResponse(
+    res,
+    201,
+    true,
+    `${type} module created successfully.`,
+    module,
+  );
 });
 
 // GET /module/:type?subtopic_id=xxx  — list modules for a subtopic
@@ -72,14 +84,21 @@ const getBySubTopic = asyncHandler(async (req, res) => {
   if (!Model) return sendError(res, 400, false, `Invalid module type: ${type}`);
 
   const { subtopic_id } = req.query;
-  if (!subtopic_id) return sendError(res, 400, false, "subtopic_id query param required.");
+  if (!subtopic_id)
+    return sendError(res, 400, false, "subtopic_id query param required.");
 
   const modules = await Model.find(
     { sub_topic_id: subtopic_id, is_active: true },
     { questions: 0, words: 0 },
   ).sort({ order: 1 });
 
-  return sendResponse(res, 200, true, `${type} modules fetched successfully.`, modules);
+  return sendResponse(
+    res,
+    200,
+    true,
+    `${type} modules fetched successfully.`,
+    modules,
+  );
 });
 
 // GET /module/:type/:id
@@ -89,7 +108,8 @@ const getOne = asyncHandler(async (req, res) => {
   if (!Model) return sendError(res, 400, false, `Invalid module type: ${type}`);
 
   const module = await Model.findById(id);
-  if (!module || !module.is_active) return sendError(res, 404, false, "Module not found.");
+  if (!module || !module.is_active)
+    return sendError(res, 404, false, "Module not found.");
 
   return sendResponse(res, 200, true, "Module fetched successfully.", module);
 });
@@ -101,13 +121,16 @@ const update = asyncHandler(async (req, res) => {
   if (!Model) return sendError(res, 400, false, `Invalid module type: ${type}`);
 
   const module = await Model.findById(id);
-  if (!module) return sendError(res, 404, false, "Module not found.");
+  if (!module || !module.is_active)
+    return sendError(res, 404, false, "Module not found.");
 
   const data = { ...req.body };
 
-  ["questions", "words", "video", "audio", "content", "subtitle"].forEach((field) => {
-    if (data[field]) data[field] = parseJsonField(data[field]);
-  });
+  ["questions", "words", "video", "audio", "content", "subtitle"].forEach(
+    (field) => {
+      if (data[field]) data[field] = parseJsonField(data[field]);
+    },
+  );
 
   if (req.file && FOLDER_MAP[type]) {
     const uploaded = await uploadToAws({
@@ -115,10 +138,13 @@ const update = asyncHandler(async (req, res) => {
       fileName: `${type}_${Date.now()}`,
       folderName: FOLDER_MAP[type],
     });
+    fs.unlink(req.file.path, () => {});
     const url = uploaded?.cdnUrl || uploaded?.fullS3URL || "";
 
-    if (type === "video") data.video = { ...(module.video?.toObject?.() || {}), url };
-    if (type === "audio") data.audio = { ...(module.audio?.toObject?.() || {}), url };
+    if (type === "video")
+      data.video = { ...(module.video?.toObject?.() || {}), url };
+    if (type === "audio")
+      data.audio = { ...(module.audio?.toObject?.() || {}), url };
   }
 
   Object.assign(module, data);

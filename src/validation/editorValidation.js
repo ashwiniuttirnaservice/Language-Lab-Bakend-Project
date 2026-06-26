@@ -7,10 +7,6 @@ const createEditorSchema = Joi.object({
   email: Joi.string().email().lowercase().required(),
   password: Joi.string().min(6).required(),
   phone: Joi.string().trim().min(7).max(15),
-  assigned_institutes: Joi.alternatives().try(
-    Joi.array().items(objectId),
-    Joi.string(),
-  ).optional(),
 });
 
 const updateEditorSchema = Joi.object({
@@ -30,10 +26,6 @@ const loginSchema = Joi.object({
   password: Joi.string().required(),
 });
 
-const assignInstituteSchema = Joi.object({
-  institute_ids: Joi.array().items(objectId).min(1).required(),
-});
-
 const changePasswordSchema = Joi.object({
   current_password: Joi.string().required(),
   new_password: Joi.string().min(6).required(),
@@ -44,6 +36,5 @@ module.exports = {
   updateEditorSchema,
   updateMeSchema,
   loginSchema,
-  assignInstituteSchema,
   changePasswordSchema,
 };

@@ -29,6 +29,8 @@ const {
   updateMe,
 } = require("../controller/instituteController");
 
+const { getByInstitute } = require("../controller/licenseBatchController");
+
 const {
   getAll: getAllCourses,
   getOne: getOneCourse,
@@ -45,6 +47,7 @@ router.get("/courses/:id", protectSuperAdmin, authorizeRoles("super_admin"), get
 // ── Institute (self) ──────────────────────────────────────────────────────────
 router.post("/logout", protectInstitute, authorizeRoles("institute"), logout);
 router.get("/me", protectInstitute, authorizeRoles("institute"), getMe);
+router.get("/me/licenses", protectInstitute, authorizeRoles("institute"), getByInstitute);
 router.put(
   "/me",
   protectInstitute,

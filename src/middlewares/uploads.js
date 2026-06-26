@@ -65,6 +65,9 @@ const allowedMimeTypes = [
   "image/jpg",
   "image/png",
   "image/gif",
+  "image/webp",
+  "image/avif",
+  "image/svg+xml",
   // Documents
   "application/pdf",
   "application/msword",

@@ -258,15 +258,48 @@ const login = asyncHandler(async (req, res) => {
     return sendError(res, 403, false, "Your institute does not have any license keys. Contact admin.");
   }
 
-  // Find any license key that is active, not expired, and has a free seat
-  // total_seats is always 1 per key — so active_sessions must be 0 for a free seat
   const now = new Date();
-  const license = await License.findOne({
+
+  // Close ALL of this student's active sessions (there may be multiple from repeated logins).
+  await Session.updateMany(
+    { student_id: student._id, is_active: true },
+    { $set: { is_active: false } },
+  );
+
+  // Recalibrate active_sessions on every license in this institute by counting
+  // actual live (non-expired) sessions. This corrects any counter drift from
+  // crashes, repeated test logins, missed logouts, or cron delays.
+  const liveCounts = await Session.aggregate([
+    {
+      $match: {
+        license_id: { $in: institute.license_ids },
+        is_active: true,
+        expires_at: { $gt: now },
+      },
+    },
+    { $group: { _id: "$license_id", count: { $sum: 1 } } },
+  ]);
+
+  const countMap = {};
+  for (const row of liveCounts) {
+    countMap[row._id.toString()] = row.count;
+  }
+
+  await Promise.all(
+    institute.license_ids.map((licId) =>
+      License.findByIdAndUpdate(licId, {
+        $set: { active_sessions: countMap[licId.toString()] ?? 0 },
+      }),
+    ),
+  );
+
+  // Find any license key that is active, not expired, and has a free seat
+  let license = await License.findOne({
     _id: { $in: institute.license_ids },
     status: "active",
     start_date: { $lte: now },
     expiry_date: { $gte: now },
-    active_sessions: { $lt: 1 },
+    $expr: { $lt: ["$active_sessions", "$total_seats"] },
   });
 
   if (!license) {
@@ -301,12 +334,26 @@ const login = asyncHandler(async (req, res) => {
       return sendError(res, 403, false, "Your institute license has not started yet. Contact admin.");
     }
 
-    return sendError(
-      res,
-      403,
-      false,
-      `All ${institute.license_count} seats are currently in use. Please try again in a few minutes.`,
-    );
+    const debugLicenses = await License.find(
+      { _id: { $in: institute.license_ids } },
+      { license_code: 1, status: 1, active_sessions: 1, total_seats: 1, start_date: 1, expiry_date: 1 },
+    ).lean();
+
+    const debugSessions = await Session.find(
+      { license_id: { $in: institute.license_ids }, is_active: true },
+      { student_id: 1, license_id: 1, expires_at: 1, is_active: 1 },
+    ).lean();
+
+    return res.status(403).json({
+      statusCode: 403,
+      success: false,
+      message: `All ${institute.license_count} seats are currently in use.`,
+      debug: {
+        now,
+        licenses: debugLicenses,
+        active_sessions_in_db: debugSessions,
+      },
+    });
   }
 
   // Atomically grab the seat

@@ -3,7 +3,6 @@ const bcrypt = require("bcryptjs");
 const { Types } = require("mongoose");
 
 const Editor = require("../models/Editor");
-const Institute = require("../models/Institute");
 const asyncHandler = require("../middlewares/asyncHandler");
 const { sendResponse, sendError } = require("../utils/apiResponse");
 const uploadToAws = require("../utils/awsUpload");
@@ -15,7 +14,7 @@ const signToken = (id) =>
 
 // ── Admin: create editor ──────────────────────────────────────────────────────
 const create = asyncHandler(async (req, res) => {
-  const { full_name, email, password, phone, assigned_institutes } = req.body;
+  const { full_name, email, password, phone } = req.body;
 
   const existing = await Editor.findOne({ email });
   if (existing) return sendError(res, 409, false, "Email already registered.");
@@ -38,16 +37,8 @@ const create = asyncHandler(async (req, res) => {
     password: hashedPassword,
     phone,
     profilePhoto,
-    assigned_institutes: assigned_institutes || [],
     created_by: req.admin._id,
   });
-
-  if (assigned_institutes?.length) {
-    await Institute.updateMany(
-      { _id: { $in: assigned_institutes } },
-      { $addToSet: { editors: editor._id } },
-    );
-  }
 
   return sendResponse(res, 201, true, "Editor created successfully.", {
     id: editor._id,
@@ -61,6 +52,7 @@ const create = asyncHandler(async (req, res) => {
 // ── Admin: get all editors ────────────────────────────────────────────────────
 const getAll = asyncHandler(async (req, res) => {
   const editors = await Editor.aggregate([
+    { $match: { is_active: true } },
     { $sort: { createdAt: -1 } },
     {
       $lookup: {
@@ -72,15 +64,6 @@ const getAll = asyncHandler(async (req, res) => {
       },
     },
     { $unwind: { path: "$created_by", preserveNullAndEmptyArrays: true } },
-    {
-      $lookup: {
-        from: "institutes",
-        localField: "assigned_institutes",
-        foreignField: "_id",
-        as: "assigned_institutes",
-        pipeline: [{ $project: { institute_name: 1, institute_code: 1 } }],
-      },
-    },
     { $project: { password: 0 } },
   ]);
 
@@ -101,15 +84,6 @@ const getOne = asyncHandler(async (req, res) => {
       },
     },
     { $unwind: { path: "$created_by", preserveNullAndEmptyArrays: true } },
-    {
-      $lookup: {
-        from: "institutes",
-        localField: "assigned_institutes",
-        foreignField: "_id",
-        as: "assigned_institutes",
-        pipeline: [{ $project: { institute_name: 1, institute_code: 1, logo: 1 } }],
-      },
-    },
     { $project: { password: 0 } },
   ]);
 
@@ -144,7 +118,7 @@ const update = asyncHandler(async (req, res) => {
   return sendResponse(res, 200, true, "Editor updated successfully.", editor);
 });
 
-// ── Admin: soft delete ────────────────────────────────────────────────────────
+// ── Admin: delete (soft) ──────────────────────────────────────────────────────
 const remove = asyncHandler(async (req, res) => {
   const editor = await Editor.findById(req.params.id);
   if (!editor) return sendError(res, 404, false, "Editor not found.");
@@ -153,7 +127,7 @@ const remove = asyncHandler(async (req, res) => {
   editor.status = "inactive";
   await editor.save();
 
-  return sendResponse(res, 200, true, "Editor deactivated successfully.");
+  return sendResponse(res, 200, true, "Editor deleted successfully.");
 });
 
 // ── Admin: toggle status ──────────────────────────────────────────────────────
@@ -172,34 +146,6 @@ const toggleStatus = asyncHandler(async (req, res) => {
     `Editor ${editor.is_active ? "activated" : "deactivated"} successfully.`,
     { is_active: editor.is_active, status: editor.status },
   );
-});
-
-// ── Admin: assign institutes ──────────────────────────────────────────────────
-const assignInstitute = asyncHandler(async (req, res) => {
-  const { institute_ids } = req.body;
-
-  const editor = await Editor.findById(req.params.id);
-  if (!editor) return sendError(res, 404, false, "Editor not found.");
-
-  const objectIds = institute_ids.map((id) => new Types.ObjectId(id));
-
-  editor.assigned_institutes = [
-    ...new Set([
-      ...editor.assigned_institutes.map((id) => id.toString()),
-      ...institute_ids,
-    ]),
-  ].map((id) => new Types.ObjectId(id));
-
-  await editor.save();
-
-  await Institute.updateMany(
-    { _id: { $in: objectIds } },
-    { $addToSet: { editors: editor._id } },
-  );
-
-  return sendResponse(res, 200, true, "Institutes assigned successfully.", {
-    assigned_institutes: editor.assigned_institutes,
-  });
 });
 
 // ── Editor: login ─────────────────────────────────────────────────────────────
@@ -296,7 +242,6 @@ module.exports = {
   update,
   remove,
   toggleStatus,
-  assignInstitute,
   login,
   getMe,
   updateMe,
