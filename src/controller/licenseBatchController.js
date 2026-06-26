@@ -137,9 +137,13 @@ const generateBatch = asyncHandler(async (req, res) => {
   });
 });
 
-// GET /api/super-admin/institute/:id/licenses
+// GET /api/super-admin/institute/:id/licenses  (super admin)
+// GET /api/institute/me/licenses               (institute self)
 const getByInstitute = asyncHandler(async (req, res) => {
-  const institute = await Institute.findById(req.params.id);
+  const instituteId = req.params.id || req.institute?._id;
+  if (!instituteId) return sendError(res, 400, false, "Institute ID is required.");
+
+  const institute = await Institute.findById(instituteId);
   if (!institute) return sendError(res, 404, false, "Institute not found.");
 
   const licenses = await License.find({

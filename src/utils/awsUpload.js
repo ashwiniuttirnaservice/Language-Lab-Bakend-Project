@@ -15,6 +15,11 @@ const mimeToExt = {
   "application/vnd.ms-excel": "xls",
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
   "video/mp4": "mp4",
+  "audio/mpeg": "mp3",
+  "audio/mp3": "mp3",
+  "audio/wav": "wav",
+  "audio/ogg": "ogg",
+  "audio/webm": "webm",
 };
 
 async function uploadToAws({ file, fileName, folderName }) {

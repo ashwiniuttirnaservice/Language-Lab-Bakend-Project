@@ -12,7 +12,6 @@ const {
   updateEditorSchema,
   updateMeSchema,
   loginSchema,
-  assignInstituteSchema,
   changePasswordSchema,
 } = require("../validation/editorValidation");
 
@@ -23,12 +22,21 @@ const {
   update,
   remove,
   toggleStatus,
-  assignInstitute,
   login,
   getMe,
   updateMe,
   changePassword,
 } = require("../controller/editorController");
+
+const {
+  create: createCourse,
+  getAll: getAllCourses,
+  getOne: getOneCourse,
+  update: updateCourse,
+  remove: removeCourse,
+} = require("../controller/courseController");
+
+const editorGuard = [protectEditor, authorizeRoles("editor")];
 
 router.post("/login", validateSchema(loginSchema), login);
 
@@ -48,6 +56,13 @@ router.put(
   validateSchema(changePasswordSchema),
   changePassword,
 );
+
+// ── Course management (editor) ────────────────────────────────────────────────
+router.post("/course", ...editorGuard, createCourse);
+router.get("/course", ...editorGuard, getAllCourses);
+router.get("/course/:id", ...editorGuard, getOneCourse);
+router.put("/course/:id", ...editorGuard, updateCourse);
+router.delete("/course/:id", ...editorGuard, removeCourse);
 
 router.post(
   "/",
@@ -74,12 +89,4 @@ router.put(
   authorizeRoles("super_admin"),
   toggleStatus,
 );
-router.put(
-  "/:id/assign-institute",
-  protectSuperAdmin,
-  authorizeRoles("super_admin"),
-  validateSchema(assignInstituteSchema),
-  assignInstitute,
-);
-
 module.exports = router;

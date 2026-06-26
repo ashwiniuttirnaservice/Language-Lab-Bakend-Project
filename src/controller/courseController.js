@@ -16,7 +16,7 @@ const create = asyncHandler(async (req, res) => {
     level,
     language,
     duration_days,
-    created_by: req.admin._id,
+    created_by: req.admin?._id || req.editor?._id,
   });
 
   return sendResponse(res, 201, true, "Course created successfully.", course);

@@ -16,8 +16,6 @@ const EditorSchema = new Schema(
       required: true,
     },
 
-    assigned_institutes: [{ type: Schema.Types.ObjectId, ref: "Institute" }],
-
     is_active: { type: Boolean, default: true },
     last_login: { type: Date },
     status: {
@@ -30,6 +28,5 @@ const EditorSchema = new Schema(
 );
 
 EditorSchema.index({ created_by: 1 });
-EditorSchema.index({ assigned_institutes: 1 });
 
 module.exports = model("Editor", EditorSchema);
