@@ -4,7 +4,11 @@ const { Schema, model } = mongoose;
 const TextModuleSchema = new Schema(
   {
     topic_id: { type: Schema.Types.ObjectId, ref: "Topic", required: true },
-    sub_topic_id: { type: Schema.Types.ObjectId, ref: "SubTopic", required: true },
+    sub_topic_id: {
+      type: Schema.Types.ObjectId,
+      ref: "SubTopic",
+      required: true,
+    },
     title: { type: String, required: true, trim: true },
     description: { type: String },
     order: { type: Number, default: 0 },

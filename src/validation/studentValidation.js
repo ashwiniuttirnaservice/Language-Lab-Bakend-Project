@@ -35,9 +35,19 @@ const loginSchema = Joi.object({
   enrollment_no: Joi.string().trim().required(),
 });
 
-const changePasswordSchema = Joi.object({
-  current_password: Joi.string().required(),
-  new_password: Joi.string().min(6).required(),
+const bulkRowSchema = Joi.object({
+  full_name: Joi.string().trim().min(2).max(100).required(),
+  email: Joi.string().email().lowercase().allow("", null),
+  phone: Joi.string().trim().min(7).max(15).allow("", null),
+  roll_no: Joi.string().trim().required(),
+  enrollment_no: Joi.string().trim().required(),
+  batch: Joi.string().trim().allow("", null),
+  course: Joi.string().trim().allow("", null),
+  year: Joi.number().integer().min(1).max(6).allow(null, ""),
+});
+
+const purchaseCourseSchema = Joi.object({
+  course_id: objectId.required(),
 });
 
 module.exports = {
@@ -45,5 +55,6 @@ module.exports = {
   updateStudentSchema,
   updateMeSchema,
   loginSchema,
-  changePasswordSchema,
+  bulkRowSchema,
+  purchaseCourseSchema,
 };

@@ -31,23 +31,45 @@ const {
 
 const { getByInstitute } = require("../controller/licenseBatchController");
 
+// Parse address from JSON string → object (sent as multipart field)
+const parseAddress = (req, _res, next) => {
+  if (req.body?.address && typeof req.body.address === "string") {
+    try { req.body.address = JSON.parse(req.body.address); } catch { /* leave as-is */ }
+  }
+  next();
+};
+
 const {
   getAll: getAllCourses,
   getOne: getOneCourse,
 } = require("../controller/courseController");
 
-
 // ── Public ────────────────────────────────────────────────────────────────────
 router.post("/login", validateSchema(loginSchema), login);
 
 // ── Courses for select/dropdown (SuperAdmin token) ────────────────────────────
-router.get("/courses/list", protectSuperAdmin, authorizeRoles("super_admin"), getAllCourses);
-router.get("/courses/:id", protectSuperAdmin, authorizeRoles("super_admin"), getOneCourse);
+router.get(
+  "/courses/list",
+  protectSuperAdmin,
+  authorizeRoles("super_admin"),
+  getAllCourses,
+);
+router.get(
+  "/courses/:id",
+  protectSuperAdmin,
+  authorizeRoles("super_admin"),
+  getOneCourse,
+);
 
 // ── Institute (self) ──────────────────────────────────────────────────────────
 router.post("/logout", protectInstitute, authorizeRoles("institute"), logout);
 router.get("/me", protectInstitute, authorizeRoles("institute"), getMe);
-router.get("/me/licenses", protectInstitute, authorizeRoles("institute"), getByInstitute);
+router.get(
+  "/me/licenses",
+  protectInstitute,
+  authorizeRoles("institute"),
+  getByInstitute,
+);
 router.put(
   "/me",
   protectInstitute,
@@ -63,6 +85,7 @@ router.post(
   protectSuperAdmin,
   authorizeRoles("super_admin"),
   upload.single("logo"),
+  parseAddress,
   validateSchema(createInstituteSchema),
   create,
 );
@@ -73,11 +96,17 @@ router.put(
   protectSuperAdmin,
   authorizeRoles("super_admin"),
   upload.single("logo"),
+  parseAddress,
   validateSchema(updateInstituteSchema),
   update,
 );
 router.delete("/:id", protectSuperAdmin, authorizeRoles("super_admin"), remove);
-router.put("/:id/toggle-status", protectSuperAdmin, authorizeRoles("super_admin"), toggleStatus);
+router.put(
+  "/:id/toggle-status",
+  protectSuperAdmin,
+  authorizeRoles("super_admin"),
+  toggleStatus,
+);
 router.put(
   "/:id/assign-license",
   protectSuperAdmin,

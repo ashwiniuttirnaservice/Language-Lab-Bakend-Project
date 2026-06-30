@@ -123,7 +123,19 @@ const update = asyncHandler(async (req, res) => {
   if (title !== undefined) topic.title = title;
   if (description !== undefined) topic.description = description;
   if (order !== undefined) topic.order = order;
-  if (is_active !== undefined) topic.is_active = is_active;
+
+  if (is_active !== undefined) {
+    const wasActive = topic.is_active;
+    topic.is_active = is_active;
+
+    // When topic is deactivated, remove it from all courses that reference it
+    if (wasActive === true && is_active === false) {
+      await Course.updateMany(
+        { topic_ids: topic._id },
+        { $pull: { topic_ids: topic._id } }
+      );
+    }
+  }
 
   await topic.save();
 
@@ -137,6 +149,12 @@ const remove = asyncHandler(async (req, res) => {
 
   topic.is_active = false;
   await topic.save();
+
+  // Remove this topic from all courses that reference it
+  await Course.updateMany(
+    { topic_ids: topic._id },
+    { $pull: { topic_ids: topic._id } }
+  );
 
   return sendResponse(res, 200, true, "Topic deactivated successfully.");
 });

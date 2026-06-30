@@ -79,7 +79,10 @@ const create = asyncHandler(async (req, res) => {
     institute_name: institute.institute_name,
     institute_code: institute.institute_code,
     email: institute.email,
+    phone: institute.phone,
+    website: institute.website,
     logo: institute.logo,
+    address: institute.address,
     is_active: institute.is_active,
     license_id: institute.license_id || null,
   });
@@ -180,6 +183,15 @@ const getOne = asyncHandler(async (req, res) => {
         pipeline: [{ $project: { full_name: 1, email: 1 } }],
       },
     },
+    {
+      $lookup: {
+        from: "courses",
+        localField: "course_id",
+        foreignField: "_id",
+        as: "courses",
+        pipeline: [{ $project: { course_name: 1, level: 1, thumbnail_url: 1, is_active: 1 } }],
+      },
+    },
     { $project: { password: 0 } },
   ]);
 
@@ -234,7 +246,8 @@ const update = asyncHandler(async (req, res) => {
 
   if (email !== undefined) institute.email = email.toLowerCase();
 
-  if (address !== undefined) institute.address = address;
+  if (address !== undefined)
+    institute.address = { ...(institute.address?.toObject?.() ?? institute.address ?? {}), ...address };
 
   if (phone !== undefined) institute.phone = phone;
 
@@ -423,7 +436,8 @@ const updateMe = asyncHandler(async (req, res) => {
   const { institute_name, address, phone, website } = req.body;
 
   if (institute_name !== undefined) institute.institute_name = institute_name;
-  if (address !== undefined) institute.address = address;
+  if (address !== undefined)
+    institute.address = { ...(institute.address?.toObject?.() ?? institute.address ?? {}), ...address };
   if (phone !== undefined) institute.phone = phone;
   if (website !== undefined) institute.website = website;
 

@@ -148,6 +148,34 @@ const updateSeats = asyncHandler(async (req, res) => {
   return sendResponse(res, 200, true, "Seats updated successfully.", license);
 });
 
+// PUT /license/:id/renew
+const renew = asyncHandler(async (req, res) => {
+  const { start_date, expiry_date } = req.body;
+
+  if (!start_date || !expiry_date) {
+    return sendError(res, 400, false, "start_date and expiry_date are required.");
+  }
+
+  const start = new Date(start_date);
+  const expiry = new Date(expiry_date);
+
+  if (expiry <= start) {
+    return sendError(res, 400, false, "expiry_date must be after start_date.");
+  }
+
+  const duration = Math.ceil((expiry - start) / 86400000);
+
+  const license = await License.findByIdAndUpdate(
+    req.params.id,
+    { start_date: start, expiry_date: expiry, duration, status: "active" },
+    { new: true },
+  );
+
+  if (!license) return sendError(res, 404, false, "License not found.");
+
+  return sendResponse(res, 200, true, "License renewed successfully.", license);
+});
+
 // DELETE /license/:id
 const remove = asyncHandler(async (req, res) => {
   const license = await License.findByIdAndDelete(req.params.id);
@@ -164,6 +192,7 @@ module.exports = {
   activate,
   suspend,
   expire,
+  renew,
   updateSeats,
   remove,
 };
