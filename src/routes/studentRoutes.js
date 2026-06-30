@@ -13,7 +13,7 @@ const {
   updateStudentSchema,
   updateMeSchema,
   loginSchema,
-  changePasswordSchema,
+  purchaseCourseSchema,
 } = require("../validation/studentValidation");
 
 const {
@@ -27,8 +27,10 @@ const {
   logout,
   getMe,
   updateMe,
-  changePassword,
   bulkUpload,
+  getAvailableCourses,
+  purchaseCourse,
+  getMyCourses,
 } = require("../controller/studentController");
 
 // ── Public ────────────────────────────────────────────────────────────────────
@@ -45,14 +47,15 @@ router.put(
   validateSchema(updateMeSchema),
   updateMe,
 );
-router.put(
-  "/me/change-password",
+router.get("/me/available-courses", protectStudent, authorizeRoles("student"), getAvailableCourses);
+router.get("/me/courses", protectStudent, authorizeRoles("student"), getMyCourses);
+router.post(
+  "/me/purchase-course",
   protectStudent,
   authorizeRoles("student"),
-  validateSchema(changePasswordSchema),
-  changePassword,
+  validateSchema(purchaseCourseSchema),
+  purchaseCourse,
 );
-
 // ── College ───────────────────────────────────────────────────────────────────
 router.post(
   "/",

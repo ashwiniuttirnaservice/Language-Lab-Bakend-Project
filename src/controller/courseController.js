@@ -24,7 +24,7 @@ const create = asyncHandler(async (req, res) => {
 
 // GET /api/super-admin/course
 const getAll = asyncHandler(async (req, res) => {
-  const courses = await Course.find({ is_active: true })
+  const courses = await Course.find()
     .sort({ createdAt: -1 })
     .select("-__v");
 
@@ -33,7 +33,8 @@ const getAll = asyncHandler(async (req, res) => {
 
 // GET /api/super-admin/course/:id
 const getOne = asyncHandler(async (req, res) => {
-  const course = await Course.findById(req.params.id);
+  const course = await Course.findById(req.params.id)
+    .populate("topic_ids", "title description order is_active");
   if (!course) return sendError(res, 404, false, "Course not found.");
 
   return sendResponse(res, 200, true, "Course fetched successfully.", course);

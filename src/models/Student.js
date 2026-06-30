@@ -27,8 +27,10 @@ const StudentSchema = new Schema(
     // ── License ────────────────────────────────────
     license_id: { type: Schema.Types.ObjectId, ref: "License" },
 
+    // ── Purchased / enrolled courses ───────────────
+    purchased_courses: [{ type: Schema.Types.ObjectId, ref: "Course" }],
+
     // ── Progress & Attendance refs ─────────────────
-    // ✅ FIXED: was ref: 'College' for both — WRONG
     attendance_id: { type: Schema.Types.ObjectId, ref: "Attendance" },
     progress_id: { type: Schema.Types.ObjectId, ref: "StudentProgress" },
 

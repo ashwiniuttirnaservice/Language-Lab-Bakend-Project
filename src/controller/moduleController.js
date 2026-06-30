@@ -107,7 +107,9 @@ const getOne = asyncHandler(async (req, res) => {
   const Model = MODEL_MAP[type];
   if (!Model) return sendError(res, 400, false, `Invalid module type: ${type}`);
 
-  const module = await Model.findById(id);
+  const module = await Model.findById(id)
+    .populate("topic_id",     "title")
+    .populate("sub_topic_id", "title");
   if (!module || !module.is_active)
     return sendError(res, 404, false, "Module not found.");
 

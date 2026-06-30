@@ -13,6 +13,7 @@ const {
   activate,
   suspend,
   expire,
+  renew,
   updateSeats,
   remove,
 } = require("../controller/licenseController");
@@ -27,6 +28,7 @@ router.get("/:id", getOne);
 router.put("/:id/activate", activate);
 router.put("/:id/suspend", suspend);
 router.put("/:id/expire", expire);
+router.put("/:id/renew", renew);
 router.put("/:id/seats", validateSchema(updateSeatsSchema), updateSeats);
 
 router.delete("/:id", remove);
