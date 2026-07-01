@@ -14,14 +14,17 @@ const StudentSchema = new Schema(
     profilePhoto: { type: String },
 
     // ── Institute ──────────────────────────────────
-    institute_id: { type: Schema.Types.ObjectId, ref: "Institute", required: true },
+    institute_id: {
+      type: Schema.Types.ObjectId,
+      ref: "Institute",
+      required: true,
+    },
     student_excel: { type: String }, // bulk upload excel file path
 
     // ── Enrollment ─────────────────────────────────
     roll_no: { type: String, required: true },
     enrollment_no: { type: String, unique: true, sparse: true },
-    batch: { type: String },
-    course: { type: String },
+    segment: { type: String },
     year: { type: Number },
 
     // ── License ────────────────────────────────────

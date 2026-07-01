@@ -24,8 +24,7 @@ const create = asyncHandler(async (req, res) => {
     phone,
     roll_no,
     enrollment_no,
-    batch,
-    course,
+    segment,
     year,
     institute_id,
   } = req.body;
@@ -64,8 +63,7 @@ const create = asyncHandler(async (req, res) => {
     profilePhoto,
     roll_no,
     enrollment_no,
-    batch,
-    course,
+    segment,
     year,
     institute_id,
   });
@@ -79,11 +77,13 @@ const create = asyncHandler(async (req, res) => {
   });
 });
 
-// ── College / Admin: get all students ────────────────────────────────────────
-const getAll = asyncHandler(async (req, res) => {
-  const matchStage = req.institute
-    ? { institute_id: new Types.ObjectId(req.institute._id) }
-    : {};
+// ── Super Admin: get ALL students across all institutes ───────────────────────
+const getAllForAdmin = asyncHandler(async (req, res) => {
+  const matchStage = {};
+  if (req.query.institute_id) matchStage.institute_id = new Types.ObjectId(req.query.institute_id);
+  if (req.query.segment)      matchStage.segment = req.query.segment;
+  if (req.query.year)         matchStage.year = Number(req.query.year);
+  if (req.query.status)       matchStage.status = req.query.status;
 
   const students = await Student.aggregate([
     { $match: matchStage },
@@ -98,15 +98,96 @@ const getAll = asyncHandler(async (req, res) => {
       },
     },
     { $unwind: { path: "$institute", preserveNullAndEmptyArrays: true } },
+    {
+      $lookup: {
+        from: "courses",
+        localField: "purchased_courses",
+        foreignField: "_id",
+        as: "purchased_courses_detail",
+        pipeline: [{ $project: { course_name: 1, course_code: 1, level: 1 } }],
+      },
+    },
+    {
+      $project: {
+        id: "$_id",
+        full_name: 1,
+        email: 1,
+        phone: 1,
+        roll_no: 1,
+        enrollment_no: 1,
+        segment: 1,
+        year: 1,
+        profilePhoto: 1,
+        status: 1,
+        is_active: 1,
+        last_login: 1,
+        createdAt: 1,
+        institute: 1,
+        purchased_courses: "$purchased_courses_detail",
+      },
+    },
   ]);
 
-  return sendResponse(
-    res,
-    200,
-    true,
-    "Students fetched successfully.",
+  return sendResponse(res, 200, true, "All students fetched.", {
+    total: students.length,
     students,
-  );
+  });
+});
+
+// ── Institute: list students (optional ?segment= ?year= filters) ──────────────
+const getAll = asyncHandler(async (req, res) => {
+  const matchStage = { institute_id: new Types.ObjectId(req.institute._id) };
+  if (req.query.segment) matchStage.segment = req.query.segment;
+  if (req.query.year) matchStage.year = Number(req.query.year);
+
+  const students = await Student.aggregate([
+    { $match: matchStage },
+    { $sort: { createdAt: -1 } },
+    {
+      $lookup: {
+        from: "institutes",
+        localField: "institute_id",
+        foreignField: "_id",
+        as: "institute",
+        pipeline: [{ $project: { institute_name: 1, institute_code: 1 } }],
+      },
+    },
+    { $unwind: { path: "$institute", preserveNullAndEmptyArrays: true } },
+    {
+      $lookup: {
+        from: "courses",
+        localField: "purchased_courses",
+        foreignField: "_id",
+        as: "purchased_courses_detail",
+        pipeline: [{ $project: { course_name: 1 } }],
+      },
+    },
+    {
+      $project: {
+        _id: 0,
+        id: "$_id",
+        full_name: 1,
+        email: 1,
+        phone: 1,
+        roll_no: 1,
+        enrollment_no: 1,
+        segment: 1,
+        year: 1,
+        profilePhoto: 1,
+        status: 1,
+        is_active: 1,
+        last_login: 1,
+        createdAt: 1,
+        institute: 1,
+        purchased_courses: "$purchased_courses_detail.course_name",
+      },
+    },
+  ]);
+
+  return sendResponse(res, 200, true, "Students fetched successfully.", {
+    total: students.length,
+    students,
+  });
 });
 
 // ── College / Admin: get one student ─────────────────────────────────────────
@@ -152,8 +233,7 @@ const update = asyncHandler(async (req, res) => {
     phone,
     roll_no,
     enrollment_no,
-    batch,
-    course,
+    segment,
     year,
     status,
     is_active,
@@ -163,8 +243,7 @@ const update = asyncHandler(async (req, res) => {
   if (phone !== undefined) student.phone = phone;
   if (roll_no !== undefined) student.roll_no = roll_no;
   if (enrollment_no !== undefined) student.enrollment_no = enrollment_no;
-  if (batch !== undefined) student.batch = batch;
-  if (course !== undefined) student.course = course;
+  if (segment !== undefined) student.segment = segment;
   if (year !== undefined) student.year = year;
   if (status !== undefined) student.status = status;
   if (is_active !== undefined) student.is_active = is_active;
@@ -512,8 +591,7 @@ const bulkUpload = asyncHandler(async (req, res) => {
       enrollment_no: String(
         row["enrollment_no"] || row["Enrollment No"] || "",
       ).trim(),
-      batch: String(row["batch"] || row["Batch"] || "").trim() || null,
-      course: String(row["course"] || row["Course"] || "").trim() || null,
+      segment: String(row["segment"] || row["Segment"] || "").trim() || null,
       year: Number(row["year"] || row["Year"]) || null,
     };
 
@@ -580,8 +658,7 @@ const bulkUpload = asyncHandler(async (req, res) => {
         phone: validated.phone || undefined,
         roll_no: validated.roll_no,
         enrollment_no: validated.enrollment_no,
-        batch: validated.batch || undefined,
-        course: validated.course || undefined,
+        segment: validated.segment || undefined,
         year: validated.year || undefined,
         institute_id,
       });
@@ -630,28 +707,101 @@ const bulkUpload = asyncHandler(async (req, res) => {
   });
 });
 
+// ── Institute: bulk assign courses to students ────────────────────────────────
+const bulkAssignCourses = asyncHandler(async (req, res) => {
+  const { student_ids, course_ids } = req.body;
+  const instituteId = req.institute._id.toString();
+
+  // All course_ids must be in institute's purchased courses
+  const instituteCourseIds = (req.institute.course_id || []).map((id) => id.toString());
+  const invalidCourses = course_ids.filter((id) => !instituteCourseIds.includes(id));
+  if (invalidCourses.length) {
+    return sendError(res, 400, false, `course_ids ${invalidCourses.join(", ")} not in institute purchased courses`);
+  }
+
+  // All student_ids must belong to this institute
+  const students = await Student.find(
+    { _id: { $in: student_ids } },
+    { institute_id: 1 },
+  ).lean();
+
+  const foundIdSet = new Set(students.map((s) => s._id.toString()));
+  const missingStudent = student_ids.find((id) => !foundIdSet.has(id));
+  if (missingStudent) {
+    return sendError(res, 403, false, `student ${missingStudent} does not belong to this institute`);
+  }
+
+  const wrongInstitute = students.find((s) => s.institute_id.toString() !== instituteId);
+  if (wrongInstitute) {
+    return sendError(res, 403, false, `student ${wrongInstitute._id} does not belong to this institute`);
+  }
+
+  // Append without duplicates
+  const courseObjectIds = course_ids.map((id) => new Types.ObjectId(id));
+  await Student.updateMany(
+    { _id: { $in: student_ids } },
+    { $addToSet: { purchased_courses: { $each: courseObjectIds } } },
+  );
+
+  return sendResponse(res, 200, true, `Courses assigned to ${student_ids.length} students`, {
+    assigned_count: student_ids.length,
+  });
+});
+
 // ── Student: list courses available at their institute ────────────────────────
 const getAvailableCourses = asyncHandler(async (req, res) => {
-  const student = await Student.findById(req.student._id).select("institute_id purchased_courses");
+  const [result] = await Student.aggregate([
+    { $match: { _id: new Types.ObjectId(req.student._id) } },
+    {
+      $lookup: {
+        from: "institutes",
+        localField: "institute_id",
+        foreignField: "_id",
+        as: "institute",
+        pipeline: [{ $project: { course_id: 1 } }],
+      },
+    },
+    { $unwind: { path: "$institute", preserveNullAndEmptyArrays: true } },
+    // Courses the student is already enrolled in
+    {
+      $lookup: {
+        from: "courses",
+        localField: "purchased_courses",
+        foreignField: "_id",
+        as: "purchased_courses_detail",
+        pipeline: [
+          { $match: { is_active: true } },
+          { $project: { course_name: 1, course_code: 1, description: 1, level: 1, language: 1, duration_days: 1, thumbnail_url: 1 } },
+        ],
+      },
+    },
+    {
+      $project: {
+        _id: 0,
+        student: {
+          id: "$_id",
+          name: "$full_name",
+          roll_no: "$roll_no",
+          segment: "$segment",
+          year: "$year",
+          email: "$email",
+          phone: "$phone",
+          profilePhoto: "$profilePhoto",
+        },
+        purchased_courses: "$purchased_courses_detail",
+      },
+    },
+  ]);
 
-  const institute = await Institute.findById(student.institute_id)
-    .select("course_id")
-    .populate({
-      path: "course_id",
-      match: { is_active: true },
-      select: "course_name course_code description level language duration_days thumbnail_url",
-    });
+  if (!result) return sendError(res, 404, false, "Student not found.");
 
-  if (!institute) return sendError(res, 404, false, "Institute not found.");
-
-  const purchasedSet = new Set((student.purchased_courses || []).map((id) => id.toString()));
-
-  const courses = (institute.course_id || []).map((c) => ({
-    ...c.toObject(),
-    is_enrolled: purchasedSet.has(c._id.toString()),
-  }));
-
-  return sendResponse(res, 200, true, "Available courses fetched.", courses);
+  return sendResponse(res, 200, true, "Student courses fetched.", {
+    student: result.student,
+    purchased_courses: {
+      total: result.purchased_courses.length,
+      courses: result.purchased_courses,
+    },
+  });
 });
 
 // ── Student: enroll / purchase a course ──────────────────────────────────────
@@ -727,6 +877,7 @@ const getMyCourses = asyncHandler(async (req, res) => {
 module.exports = {
   create,
   getAll,
+  getAllForAdmin,
   getOne,
   update,
   remove,
@@ -736,6 +887,7 @@ module.exports = {
   getMe,
   updateMe,
   bulkUpload,
+  bulkAssignCourses,
   getAvailableCourses,
   purchaseCourse,
   getMyCourses,

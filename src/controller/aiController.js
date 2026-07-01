@@ -56,7 +56,7 @@ const ask = asyncHandler(async (req, res) => {
         `Topic: ${subTopic.topic_id?.title || ""}. SubTopic: ${subTopic.title}.\n` +
         `Module type: ${module_type}.\n` +
         `Content context: ${contextBody}\n` +
-        `Student: ${req.student.full_name}, Course: ${req.student.course || "General"}.\n` +
+        `Student: ${req.student.full_name}, Segment: ${req.student.segment || "General"}.\n` +
         `Rules: Answer in English only. Keep answers under 120 words. Do not answer off-topic questions.`,
     },
     { role: "user", content: question },
