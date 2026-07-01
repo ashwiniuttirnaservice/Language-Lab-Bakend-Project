@@ -14,6 +14,7 @@ const {
   updateMeSchema,
   loginSchema,
   purchaseCourseSchema,
+  bulkAssignCoursesSchema,
 } = require("../validation/studentValidation");
 
 const {
@@ -28,6 +29,7 @@ const {
   getMe,
   updateMe,
   bulkUpload,
+  bulkAssignCourses,
   getAvailableCourses,
   purchaseCourse,
   getMyCourses,
@@ -78,5 +80,6 @@ router.put(
 router.delete("/:id", protectInstitute, authorizeRoles("institute"), remove);
 router.put("/:id/toggle-status", protectInstitute, authorizeRoles("institute"), toggleStatus);
 router.post("/bulk-upload", protectInstitute, authorizeRoles("institute"), upload.single("studentExcel"), bulkUpload);
+router.post("/bulk-assign-courses", protectInstitute, authorizeRoles("institute"), validateSchema(bulkAssignCoursesSchema), bulkAssignCourses);
 
 module.exports = router;

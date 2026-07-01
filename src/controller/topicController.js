@@ -5,6 +5,14 @@ const Course = require("../models/Course");
 const asyncHandler = require("../middlewares/asyncHandler");
 const { sendResponse, sendError } = require("../utils/apiResponse");
 
+const MODULE_COLLECTION_MAP = {
+  video: "videomodules",
+  audio: "audiomodules",
+  text: "textmodules",
+  exercise: "exercisemodules",
+  vocabulary: "vocabularymodules",
+};
+
 // POST /topic  — Topic is standalone, no course_id needed here
 // Assigning topics to courses is done via PUT /super-admin/course/:id (topic_ids[])
 const create = asyncHandler(async (req, res) => {
@@ -20,20 +28,44 @@ const create = asyncHandler(async (req, res) => {
   return sendResponse(res, 201, true, "Topic created successfully.", topic);
 });
 
-// GET /topic
+// GET /topic?course_id=xxx&type=video
 const getAll = asyncHandler(async (req, res) => {
+  const { type } = req.query;
+  let typeCollection;
+  if (type) {
+    typeCollection = MODULE_COLLECTION_MAP[type];
+    if (!typeCollection) return sendError(res, 400, false, `Invalid module type: ${type}`);
+  }
+
   let matchStage = { is_active: true };
 
   if (req.editor) {
     matchStage.created_by = new Types.ObjectId(req.editor._id);
   } else if (req.student) {
+    const { course_id } = req.query;
+
+    if (course_id) {
+      // Student must be enrolled in this course to view its topics
+      const Student = require("../models/Student");
+      const student = await Student.findById(req.student._id).select("purchased_courses");
+      const enrolled = (student?.purchased_courses || []).some(
+        (id) => id.toString() === course_id,
+      );
+      if (!enrolled)
+        return sendError(res, 403, false, "You are not enrolled in this course.");
+    }
+
     const Institute = require("../models/Institute");
     const institute = await Institute.findById(req.student.institute_id).select("course_id");
 
-    if (institute?.course_id?.length) {
-      // Get all courses for this institute, collect topic_ids from each
+    // Restrict to the requested course, or fall back to all institute courses
+    const courseIds = course_id
+      ? institute?.course_id?.filter((id) => id.toString() === course_id)
+      : institute?.course_id;
+
+    if (courseIds?.length) {
       const courses = await Course.find(
-        { _id: { $in: institute.course_id }, is_active: true },
+        { _id: { $in: courseIds }, is_active: true },
         { topic_ids: 1 },
       ).lean();
 
@@ -55,10 +87,12 @@ const getAll = asyncHandler(async (req, res) => {
       }
 
       matchStage._id = { $in: allTopicIds };
+    } else {
+      return sendResponse(res, 200, true, "Topics fetched successfully.", []);
     }
   }
 
-  const topics = await Topic.aggregate([
+  const pipeline = [
     { $match: matchStage },
     { $sort: { order: 1, createdAt: 1 } },
     {
@@ -75,7 +109,33 @@ const getAll = asyncHandler(async (req, res) => {
       },
     },
     { $addFields: { subtopic_count: { $size: "$subtopics" } } },
-  ]);
+  ];
+
+  // Only return topics that actually have at least one active module of the requested type
+  if (typeCollection) {
+    pipeline.push(
+      {
+        $lookup: {
+          from: typeCollection,
+          let: { topicId: "$_id" },
+          pipeline: [
+            {
+              $match: {
+                $expr: { $eq: ["$topic_id", "$$topicId"] },
+                is_active: true,
+              },
+            },
+            { $limit: 1 },
+          ],
+          as: "_has_module",
+        },
+      },
+      { $match: { "_has_module.0": { $exists: true } } },
+      { $project: { _has_module: 0 } },
+    );
+  }
+
+  const topics = await Topic.aggregate(pipeline);
 
   return sendResponse(res, 200, true, "Topics fetched successfully.", topics);
 });

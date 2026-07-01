@@ -39,6 +39,10 @@ const updateInstituteSchema = Joi.object({
   website: Joi.string().uri(),
   max_students: Joi.number().integer().min(1),
   is_active: Joi.boolean(),
+  course_id: Joi.alternatives().try(
+    Joi.array().items(objectId).min(1),
+    objectId
+  ),
 });
 
 const updateAddressSchema = Joi.object({

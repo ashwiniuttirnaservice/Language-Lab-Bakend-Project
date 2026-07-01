@@ -218,7 +218,20 @@ const update = asyncHandler(async (req, res) => {
     website,
     max_students,
     is_active,
+    course_id,
   } = req.body;
+
+  if (course_id !== undefined) {
+    const courseIds = Array.isArray(course_id) ? course_id : [course_id];
+    if (courseIds.length === 0) {
+      return sendError(res, 400, false, "At least one course_id is required.");
+    }
+
+    const courseCount = await Course.countDocuments({ _id: { $in: courseIds }, is_active: true });
+    if (courseCount !== courseIds.length) {
+      return sendError(res, 404, false, "One or more selected courses not found or are inactive.");
+    }
+  }
 
   if (email || institute_code) {
     const existingInstitute = await Institute.findOne({
@@ -256,6 +269,9 @@ const update = asyncHandler(async (req, res) => {
   if (max_students !== undefined) institute.max_students = max_students;
 
   if (is_active !== undefined) institute.is_active = is_active;
+
+  if (course_id !== undefined)
+    institute.course_id = Array.isArray(course_id) ? course_id : [course_id];
 
   if (password) institute.password = await bcrypt.hash(password, 12);
 
@@ -455,6 +471,45 @@ const updateMe = asyncHandler(async (req, res) => {
   return sendResponse(res, 200, true, "Profile updated successfully.", institute);
 });
 
+// GET /institute/me/courses
+const getPurchasedCourses = asyncHandler(async (req, res) => {
+  const { Types } = require("mongoose");
+
+  const [institute] = await Institute.aggregate([
+    { $match: { _id: new Types.ObjectId(req.institute._id) } },
+    {
+      $lookup: {
+        from: "courses",
+        localField: "course_id",
+        foreignField: "_id",
+        as: "courses",
+        pipeline: [
+          { $match: { is_active: true } },
+          {
+            $project: {
+              course_name: 1,
+              course_code: 1,
+              description: 1,
+              level: 1,
+              language: 1,
+              duration_days: 1,
+              thumbnail_url: 1,
+            },
+          },
+        ],
+      },
+    },
+    { $project: { courses: 1, _id: 0 } },
+  ]);
+
+  const courses = institute?.courses ?? [];
+
+  return sendResponse(res, 200, true, "Purchased courses fetched.", {
+    total: courses.length,
+    courses,
+  });
+});
+
 // POST /institute/logout
 const logout = asyncHandler(async (req, res) => {
   return sendResponse(res, 200, true, "Logged out successfully.", null);
@@ -472,4 +527,5 @@ module.exports = {
   logout,
   getMe,
   updateMe,
+  getPurchasedCourses,
 };

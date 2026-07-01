@@ -16,6 +16,7 @@ const {
   getProfile,
   updateProfile,
   changePassword,
+  getDashboard,
 } = require("../controller/superAdminController");
 
 const {
@@ -32,6 +33,8 @@ const {
   resetSeats,
 } = require("../controller/licenseBatchController");
 
+const { getAllForAdmin: getAllStudents } = require("../controller/studentController");
+
 const protectSuperAdmin = require("../middlewares/protectSuperAdmin");
 const authorizeRoles = require("../middlewares/authorizeRoles");
 
@@ -40,6 +43,9 @@ const guard = [protectSuperAdmin, authorizeRoles("super_admin")];
 // ── Public ────────────────────────────────────────────────────────────────────
 router.post("/register", upload.single("profileImage"), validateSchema(registerSchema), register);
 router.post("/login", validateSchema(loginSchema), login);
+
+// ── Dashboard ─────────────────────────────────────────────────────────────────
+router.get("/dashboard", ...guard, getDashboard);
 
 // ── SuperAdmin profile ────────────────────────────────────────────────────────
 router.get("/profile", ...guard, getProfile);
@@ -52,6 +58,9 @@ router.get("/course", ...guard, getAllCourses);
 router.get("/course/:id", ...guard, getOneCourse);
 router.put("/course/:id", ...guard, updateCourse);
 router.delete("/course/:id", ...guard, removeCourse);
+
+// ── Students (super admin view) ───────────────────────────────────────────────
+router.get("/students", ...guard, getAllStudents);
 
 // ── Institute license batch generation ───────────────────────────────────────
 router.put("/institute/:id/license", ...guard, generateBatch);
