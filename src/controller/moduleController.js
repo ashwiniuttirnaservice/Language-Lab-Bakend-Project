@@ -2,6 +2,7 @@ const fs = require("fs");
 const VideoModule = require("../models/VideoModule");
 const AudioModule = require("../models/AudioModule");
 const TextModule = require("../models/TextModule");
+const axios = require("axios");
 const ExerciseModule = require("../models/ExerciseModule");
 const VocabularyModule = require("../models/VocabularyModule");
 const asyncHandler = require("../middlewares/asyncHandler");
@@ -155,6 +156,16 @@ const update = asyncHandler(async (req, res) => {
   return sendResponse(res, 200, true, "Module updated successfully.", module);
 });
 
+
+// POST /module/get-content-from-ai
+
+
+
+
+
+
+  // Handle file upload for video/audio
+
 // DELETE /module/:type/:id
 const remove = asyncHandler(async (req, res) => {
   const { type, id } = req.params;
@@ -170,4 +181,4 @@ const remove = asyncHandler(async (req, res) => {
   return sendResponse(res, 200, true, "Module deactivated successfully.");
 });
 
-module.exports = { create, getBySubTopic, getOne, update, remove };
+module.exports = { create, getBySubTopic, getOne, update, remove,  };

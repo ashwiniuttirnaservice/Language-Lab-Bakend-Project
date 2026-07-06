@@ -75,7 +75,7 @@ const ask = asyncHandler(async (req, res) => {
         stream: false,
         options: {
           temperature: 0.4,
-          num_predict: 200,
+          num_predict: 500,
         },
       },
       {
@@ -92,6 +92,41 @@ const ask = asyncHandler(async (req, res) => {
       : "AI service temporarily unavailable. Please try again.";
     return sendError(res, 502, false, reason);
   }
+
+
+// const axios = require("axios");
+
+// try {
+//   console.log("Connecting to Ollama...");
+
+//   const { data } = await axios.post(
+//     "http://192.168.1.250:11434/api/chat",
+//     {
+//       model: "qwen3:4b-instruct",
+//       messages: [
+//         {
+//           role: "user",
+//           content: "Say Hello",
+//         },
+//       ],
+//       stream: false,
+//     },
+//     {
+//       timeout: 60000,
+//       headers: {
+//         "Content-Type": "application/json",
+//       },
+//     }
+//   );
+
+//   console.log("SUCCESS:", data);
+// } catch (err) {
+//   console.log("Code:", err.code);
+//   console.log("Message:", err.message);
+//   console.log("Response:", err.response?.data);
+//   console.log("Stack:", err.stack);
+// }
+
 
   // Save to ChatHistory
   await ChatHistory.create({
@@ -124,6 +159,101 @@ const ask = asyncHandler(async (req, res) => {
   });
 });
 
+const getContentFromAI = asyncHandler(async (req, res) => {
+  const { topic, subtopic, content } = req.body;
+
+
+console.log("Content  for req length:", content.length);
+
+
+  if (!topic || !subtopic || !content) {
+    return sendError(
+      res,
+      400,
+      false,
+      "Topic, subtopic and content are required."
+    );
+  }
+
+  const prompt = `
+You are an educational AI assistant.
+
+Topic: ${topic}
+Subtopic: ${subtopic}
+
+Content:
+${content}
+
+
+Requirements:
+- Read and understand the provided content carefully.
+- Create a learning module that helps students understand the topic.
+- Organize the module using clear Markdown headings.
+- Include:
+1. Module Title
+2. Learning Objectives (3–5 points)
+3. Key Concepts (short explanations)
+4. Important Points to Remember
+5. 10 assessment questions based only on the provided content
+- Questions should:
+- Be clear and easy to understand.
+- Cover the important concepts from the content.
+- Encourage comprehension rather than memorization.
+- Not include answers.
+- Do not add information that is not present in the provided content.
+- Return the entire response in well-formatted Markdown.
+
+Respond in well-formatted Markdown.
+`;
+
+  try {
+    const start = Date.now();
+    const { data } = await axios.post("http://192.168.1.250:11434/api/chat", {
+      model: "qwen3:4b-instruct",
+      messages: [
+        {
+          role: "user",
+          content: prompt,
+        },
+      ],
+ stream: false,
+  options: {
+
+    temperature: 0.4,
+    num_predict: 200,
+  },
+
+    });
+
+    const responseContent = data?.message?.content;
+    console.log("Content  ai length:", responseContent.length);
+   console.log(`Ollama took ${(Date.now() - start) / 1000}s`);
+    console.log("=========AI=========== Response Content:", responseContent);
+
+    return sendResponse(
+      res,
+      200,
+      true,
+      "Content generated successfully.",
+      {
+        topic,
+        subtopic,
+        response: responseContent,
+      }
+    );
+  } catch (error) {
+    console.error("Error generating content from AI:", error.message);
+    return sendError(
+      res,
+      500,
+      false,
+      "Failed to generate content from AI."
+    );
+  }
+});
+
+
+
 // GET /ai/history
 const getHistory = asyncHandler(async (req, res) => {
   const { sub_topic_id, limit = 50 } = req.query;
@@ -138,4 +268,4 @@ const getHistory = asyncHandler(async (req, res) => {
   return sendResponse(res, 200, true, "Chat history fetched successfully.", history);
 });
 
-module.exports = { ask, getHistory };
+module.exports = { ask, getHistory, getContentFromAI };

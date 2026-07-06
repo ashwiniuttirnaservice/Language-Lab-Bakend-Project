@@ -24,6 +24,9 @@ router.post("/:type", protectEditor, authorizeRoles("editor"), (req, res, next) 
   fileField(req.params.type)(req, res, next);
 }, create);
 
+
+
+
 router.put("/:type/:id", protectEditor, authorizeRoles("editor"), (req, res, next) => {
   fileField(req.params.type)(req, res, next);
 }, update);
