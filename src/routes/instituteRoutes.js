@@ -28,6 +28,7 @@ const {
   getMe,
   updateMe,
   getPurchasedCourses,
+  getPublic,
 } = require("../controller/instituteController");
 
 const { getByInstitute } = require("../controller/licenseBatchController");
@@ -47,6 +48,7 @@ const {
 
 // ── Public ────────────────────────────────────────────────────────────────────
 router.post("/login", validateSchema(loginSchema), login);
+router.get("/public/:id", getPublic);
 
 // ── Courses for select/dropdown (SuperAdmin token) ────────────────────────────
 router.get(
