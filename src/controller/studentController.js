@@ -80,10 +80,11 @@ const create = asyncHandler(async (req, res) => {
 // ── Super Admin: get ALL students across all institutes ───────────────────────
 const getAllForAdmin = asyncHandler(async (req, res) => {
   const matchStage = {};
-  if (req.query.institute_id) matchStage.institute_id = new Types.ObjectId(req.query.institute_id);
-  if (req.query.segment)      matchStage.segment = req.query.segment;
-  if (req.query.year)         matchStage.year = Number(req.query.year);
-  if (req.query.status)       matchStage.status = req.query.status;
+  if (req.query.institute_id)
+    matchStage.institute_id = new Types.ObjectId(req.query.institute_id);
+  if (req.query.segment) matchStage.segment = req.query.segment;
+  if (req.query.year) matchStage.year = Number(req.query.year);
+  if (req.query.status) matchStage.status = req.query.status;
 
   const students = await Student.aggregate([
     { $match: matchStage },
@@ -165,7 +166,7 @@ const getAll = asyncHandler(async (req, res) => {
     {
       $project: {
         _id: 0,
-        id: "$_id",
+        _id: "$_id",
         full_name: 1,
         email: 1,
         phone: 1,
@@ -713,10 +714,19 @@ const bulkAssignCourses = asyncHandler(async (req, res) => {
   const instituteId = req.institute._id.toString();
 
   // All course_ids must be in institute's purchased courses
-  const instituteCourseIds = (req.institute.course_id || []).map((id) => id.toString());
-  const invalidCourses = course_ids.filter((id) => !instituteCourseIds.includes(id));
+  const instituteCourseIds = (req.institute.course_id || []).map((id) =>
+    id.toString(),
+  );
+  const invalidCourses = course_ids.filter(
+    (id) => !instituteCourseIds.includes(id),
+  );
   if (invalidCourses.length) {
-    return sendError(res, 400, false, `course_ids ${invalidCourses.join(", ")} not in institute purchased courses`);
+    return sendError(
+      res,
+      400,
+      false,
+      `course_ids ${invalidCourses.join(", ")} not in institute purchased courses`,
+    );
   }
 
   // All student_ids must belong to this institute
@@ -728,12 +738,24 @@ const bulkAssignCourses = asyncHandler(async (req, res) => {
   const foundIdSet = new Set(students.map((s) => s._id.toString()));
   const missingStudent = student_ids.find((id) => !foundIdSet.has(id));
   if (missingStudent) {
-    return sendError(res, 403, false, `student ${missingStudent} does not belong to this institute`);
+    return sendError(
+      res,
+      403,
+      false,
+      `student ${missingStudent} does not belong to this institute`,
+    );
   }
 
-  const wrongInstitute = students.find((s) => s.institute_id.toString() !== instituteId);
+  const wrongInstitute = students.find(
+    (s) => s.institute_id.toString() !== instituteId,
+  );
   if (wrongInstitute) {
-    return sendError(res, 403, false, `student ${wrongInstitute._id} does not belong to this institute`);
+    return sendError(
+      res,
+      403,
+      false,
+      `student ${wrongInstitute._id} does not belong to this institute`,
+    );
   }
 
   // Append without duplicates
@@ -743,9 +765,15 @@ const bulkAssignCourses = asyncHandler(async (req, res) => {
     { $addToSet: { purchased_courses: { $each: courseObjectIds } } },
   );
 
-  return sendResponse(res, 200, true, `Courses assigned to ${student_ids.length} students`, {
-    assigned_count: student_ids.length,
-  });
+  return sendResponse(
+    res,
+    200,
+    true,
+    `Courses assigned to ${student_ids.length} students`,
+    {
+      assigned_count: student_ids.length,
+    },
+  );
 });
 
 // ── Student: list courses available at their institute ────────────────────────
@@ -771,7 +799,17 @@ const getAvailableCourses = asyncHandler(async (req, res) => {
         as: "purchased_courses_detail",
         pipeline: [
           { $match: { is_active: true } },
-          { $project: { course_name: 1, course_code: 1, description: 1, level: 1, language: 1, duration_days: 1, thumbnail_url: 1 } },
+          {
+            $project: {
+              course_name: 1,
+              course_code: 1,
+              description: 1,
+              level: 1,
+              language: 1,
+              duration_days: 1,
+              thumbnail_url: 1,
+            },
+          },
         ],
       },
     },
@@ -809,24 +847,37 @@ const purchaseCourse = asyncHandler(async (req, res) => {
   const { course_id } = req.body;
 
   const course = await Course.findOne({ _id: course_id, is_active: true });
-  if (!course) return sendError(res, 404, false, "Course not found or inactive.");
+  if (!course)
+    return sendError(res, 404, false, "Course not found or inactive.");
 
   const student = await Student.findById(req.student._id);
 
-  const institute = await Institute.findById(student.institute_id).select("course_id");
+  const institute = await Institute.findById(student.institute_id).select(
+    "course_id",
+  );
   if (!institute) return sendError(res, 404, false, "Institute not found.");
 
   const offeredByInstitute = institute.course_id.some(
     (id) => id.toString() === course_id,
   );
   if (!offeredByInstitute)
-    return sendError(res, 403, false, "This course is not available at your institute.");
+    return sendError(
+      res,
+      403,
+      false,
+      "This course is not available at your institute.",
+    );
 
   const alreadyEnrolled = (student.purchased_courses || []).some(
     (id) => id.toString() === course_id,
   );
   if (alreadyEnrolled)
-    return sendError(res, 409, false, "You are already enrolled in this course.");
+    return sendError(
+      res,
+      409,
+      false,
+      "You are already enrolled in this course.",
+    );
 
   student.purchased_courses.push(course_id);
   await student.save();
@@ -871,7 +922,13 @@ const getMyCourses = asyncHandler(async (req, res) => {
     { $project: { purchased_courses: 1 } },
   ]);
 
-  return sendResponse(res, 200, true, "Enrolled courses fetched.", student?.purchased_courses ?? []);
+  return sendResponse(
+    res,
+    200,
+    true,
+    "Enrolled courses fetched.",
+    student?.purchased_courses ?? [],
+  );
 });
 
 module.exports = {

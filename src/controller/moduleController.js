@@ -32,6 +32,13 @@ const parseJsonField = (value) => {
   return value;
 };
 
+// Students must not see correct answers before submitting an attempt.
+const stripAnswers = (doc) => {
+  const plain = doc.toObject();
+  plain.questions = plain.questions.map(({ correct_answer, explanation, ...q }) => q);
+  return plain;
+};
+
 // POST /module/:type
 const create = asyncHandler(async (req, res) => {
   const { type } = req.params;
@@ -87,17 +94,23 @@ const getBySubTopic = asyncHandler(async (req, res) => {
   if (!subtopic_id)
     return sendError(res, 400, false, "subtopic_id query param required.");
 
-  const modules = await Model.find(
-    { sub_topic_id: subtopic_id, is_active: true },
-    { questions: 0, words: 0 },
-  ).sort({ order: 1 });
+  const modules = await Model.find({
+    sub_topic_id: subtopic_id,
+    is_active: true,
+  })
+    .populate("topic_id", "title")
+    .populate("sub_topic_id", "title")
+    .sort({ order: 1 });
+
+  const data =
+    type === "exercise" && req.student ? modules.map(stripAnswers) : modules;
 
   return sendResponse(
     res,
     200,
     true,
     `${type} modules fetched successfully.`,
-    modules,
+    data,
   );
 });
 
@@ -112,6 +125,10 @@ const getOne = asyncHandler(async (req, res) => {
     .populate("sub_topic_id", "title");
   if (!module || !module.is_active)
     return sendError(res, 404, false, "Module not found.");
+
+  if (type === "exercise" && req.student) {
+    return sendResponse(res, 200, true, "Module fetched successfully.", stripAnswers(module));
+  }
 
   return sendResponse(res, 200, true, "Module fetched successfully.", module);
 });

@@ -1,4 +1,5 @@
 const bcrypt = require("bcryptjs");
+const mongoose = require("mongoose");
 
 const Institute = require("../models/Institute");
 const Course = require("../models/Course");
@@ -515,6 +516,23 @@ const logout = asyncHandler(async (req, res) => {
   return sendResponse(res, 200, true, "Logged out successfully.", null);
 });
 
+// GET /institute/public/:id
+// No auth — only safe, non-sensitive fields for public display (e.g. landing page).
+const getPublic = asyncHandler(async (req, res) => {
+  if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+    return sendError(res, 404, false, "Institute not found.");
+  }
+
+  const institute = await Institute.findOne(
+    { _id: req.params.id, is_active: true },
+    "institute_name institute_code logo website address.state address.dist address.nearbyLandmarks",
+  ).lean();
+
+  if (!institute) return sendError(res, 404, false, "Institute not found.");
+
+  return sendResponse(res, 200, true, "Institute fetched successfully.", institute);
+});
+
 module.exports = {
   create,
   getAll,
@@ -528,4 +546,5 @@ module.exports = {
   getMe,
   updateMe,
   getPurchasedCourses,
+  getPublic,
 };
