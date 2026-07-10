@@ -76,4 +76,213 @@ const getStudentProgress = asyncHandler(async (req, res) => {
   return sendResponse(res, 200, true, "Progress fetched successfully.", progress);
 });
 
-module.exports = { getMyProgress, getStudentProgress };
+// GET /progress/dashboard-kpi — student's dashboard KPI statistics
+const getDashboardKPI = asyncHandler(async (req, res) => {
+  const Student = require("../models/Student");
+  const Course = require("../models/Course");
+  const Topic = require("../models/Topic");
+  const SubTopic = require("../models/SubTopic");
+  const StudentProgress = require("../models/StudentProgress");
+
+  // Models for modules
+  const VideoModule = require("../models/VideoModule");
+  const AudioModule = require("../models/AudioModule");
+  const TextModule = require("../models/TextModule");
+  const ExerciseModule = require("../models/ExerciseModule");
+  const VocabularyModule = require("../models/VocabularyModule");
+
+  const student = await Student.findById(req.student._id).select("purchased_courses");
+  if (!student) {
+    const { sendError } = require("../utils/apiResponse");
+    return sendError(res, 404, false, "Student not found.");
+  }
+
+  const courseIds = student.purchased_courses || [];
+  if (!courseIds.length) {
+    return sendResponse(res, 200, true, "KPI fetched successfully.", {
+      totalLessons: 0,
+      completedLessons: 0,
+      incompleteLessons: 0,
+      inProgressLessons: 0,
+      notStartedLessons: 0,
+      totalModules: 0,
+      completedModules: 0,
+      pendingModules: 0,
+    });
+  }
+
+  // Find all active topics in these courses
+  const courses = await Course.find({ _id: { $in: courseIds }, is_active: true }).select("topic_ids");
+  const topicIds = [];
+  const seenTopics = new Set();
+  for (const c of courses) {
+    for (const id of c.topic_ids) {
+      if (!seenTopics.has(id.toString())) {
+        seenTopics.add(id.toString());
+        topicIds.push(id);
+      }
+    }
+  }
+
+  if (!topicIds.length) {
+    return sendResponse(res, 200, true, "KPI fetched successfully.", {
+      totalLessons: 0,
+      completedLessons: 0,
+      incompleteLessons: 0,
+      inProgressLessons: 0,
+      notStartedLessons: 0,
+      totalModules: 0,
+      completedModules: 0,
+      pendingModules: 0,
+    });
+  }
+
+  // Find all active subtopics (lessons) in these topics
+  const subTopics = await SubTopic.find({ topic_id: { $in: topicIds }, is_active: true }).select("_id topic_id title");
+  const subTopicIds = subTopics.map((s) => s._id);
+
+  if (!subTopicIds.length) {
+    return sendResponse(res, 200, true, "KPI fetched successfully.", {
+      totalLessons: 0,
+      completedLessons: 0,
+      incompleteLessons: 0,
+      inProgressLessons: 0,
+      notStartedLessons: 0,
+      totalModules: 0,
+      completedModules: 0,
+      pendingModules: 0,
+    });
+  }
+
+  // Query active modules across all 5 collections
+  const moduleQueries = [
+    VideoModule.find({ sub_topic_id: { $in: subTopicIds }, is_active: true }).select("_id sub_topic_id"),
+    AudioModule.find({ sub_topic_id: { $in: subTopicIds }, is_active: true }).select("_id sub_topic_id"),
+    TextModule.find({ sub_topic_id: { $in: subTopicIds }, is_active: true }).select("_id sub_topic_id"),
+    ExerciseModule.find({ sub_topic_id: { $in: subTopicIds }, is_active: true }).select("_id sub_topic_id"),
+    VocabularyModule.find({ sub_topic_id: { $in: subTopicIds }, is_active: true }).select("_id sub_topic_id"),
+  ];
+
+  const moduleResults = await Promise.all(moduleQueries);
+
+  // Group modules by subtopic
+  const subtopicModulesMap = {};
+  subTopicIds.forEach((id) => {
+    subtopicModulesMap[id.toString()] = [];
+  });
+
+  let totalModulesCount = 0;
+  const allActiveModuleIds = [];
+  const moduleTypesMap = {};
+  const moduleTypes = ["video", "audio", "text", "exercise", "vocabulary"];
+
+  const moduleBreakdown = {
+    video: { completed: 0, total: 0 },
+    audio: { completed: 0, total: 0 },
+    text: { completed: 0, total: 0 },
+    exercise: { completed: 0, total: 0 },
+    vocabulary: { completed: 0, total: 0 },
+  };
+
+  moduleResults.forEach((modules, idx) => {
+    const type = moduleTypes[idx];
+    modules.forEach((mod) => {
+      const subIdStr = mod.sub_topic_id.toString();
+      if (subtopicModulesMap[subIdStr]) {
+        subtopicModulesMap[subIdStr].push(mod._id.toString());
+        allActiveModuleIds.push(mod._id);
+        moduleTypesMap[mod._id.toString()] = type;
+        moduleBreakdown[type].total++;
+        totalModulesCount++;
+      }
+    });
+  });
+
+  // Fetch student progress records for active modules
+  const progressRecords = await StudentProgress.find({
+    student_id: student._id,
+    module_id: { $in: allActiveModuleIds },
+  }).select("module_id progress_percentage is_completed");
+
+  const progressMap = {};
+  progressRecords.forEach((rec) => {
+    progressMap[rec.module_id.toString()] = {
+      progress_percentage: rec.progress_percentage || 0,
+      is_completed: rec.is_completed || false,
+    };
+  });
+
+  // Completed/Pending module stats
+  let completedModulesCount = 0;
+  progressRecords.forEach((rec) => {
+    const isCompleted = rec.is_completed || rec.progress_percentage === 100;
+    if (isCompleted) {
+      completedModulesCount++;
+      const type = moduleTypesMap[rec.module_id.toString()];
+      if (type && moduleBreakdown[type]) {
+        moduleBreakdown[type].completed++;
+      }
+    }
+  });
+  const pendingModulesCount = totalModulesCount - completedModulesCount;
+
+  // Determine subtopic (lesson) statuses
+  let completedLessons = 0;
+  let inProgressLessons = 0;
+  let notStartedLessons = 0;
+
+  subTopics.forEach((st) => {
+    const stIdStr = st._id.toString();
+    const modIds = subtopicModulesMap[stIdStr] || [];
+
+    if (modIds.length === 0) {
+      // If there are no modules, consider it completed (default behavior)
+      completedLessons++;
+      return;
+    }
+
+    let completedModCount = 0;
+    let startedModCount = 0;
+    let totalProgressSum = 0;
+
+    modIds.forEach((mId) => {
+      const prog = progressMap[mId];
+      if (prog) {
+        totalProgressSum += prog.progress_percentage;
+        if (prog.is_completed || prog.progress_percentage === 100) {
+          completedModCount++;
+        }
+        if (prog.progress_percentage > 0) {
+          startedModCount++;
+        }
+      }
+    });
+
+    const averageProgress = totalProgressSum / modIds.length;
+
+    if (completedModCount === modIds.length || averageProgress === 100) {
+      completedLessons++;
+    } else if (startedModCount > 0 || averageProgress > 0) {
+      inProgressLessons++;
+    } else {
+      notStartedLessons++;
+    }
+  });
+
+  const totalLessons = subTopicIds.length;
+  const incompleteLessons = totalLessons - completedLessons;
+
+  return sendResponse(res, 200, true, "KPI stats fetched successfully.", {
+    totalLessons,
+    completedLessons,
+    incompleteLessons,
+    inProgressLessons,
+    notStartedLessons,
+    totalModules: totalModulesCount,
+    completedModules: completedModulesCount,
+    pendingModules: pendingModulesCount,
+    moduleBreakdown,
+  });
+});
+
+module.exports = { getMyProgress, getStudentProgress, getDashboardKPI };

@@ -17,7 +17,8 @@ const ActivityLogSchema = new Schema(
       required: true,
     },
 
-    // Fixed: added 'ai_query' — was missing, Mistral usage could not be logged
+    // Fixed: added 'ai_query' — was missing, Mist
+    // ral usage could not be logged
     activity_type: {
       type: String,
       enum: [
