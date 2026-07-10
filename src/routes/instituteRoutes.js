@@ -23,6 +23,7 @@ const {
   remove,
   toggleStatus,
   assignLicense,
+  resendCredentials,
   login,
   logout,
   getMe,
@@ -117,6 +118,12 @@ router.put(
   authorizeRoles("super_admin"),
   validateSchema(assignLicenseSchema),
   assignLicense,
+);
+router.put(
+  "/:id/resend-credentials",
+  protectSuperAdmin,
+  authorizeRoles("super_admin"),
+  resendCredentials,
 );
 
 module.exports = router;

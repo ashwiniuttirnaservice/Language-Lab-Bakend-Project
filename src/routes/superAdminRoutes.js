@@ -25,6 +25,7 @@ const {
   getOne: getOneCourse,
   update: updateCourse,
   remove: removeCourse,
+  getCourseModuleCount,
 } = require("../controller/courseController");
 
 const {
@@ -55,6 +56,7 @@ router.put("/change-password", ...guard, validateSchema(changePasswordSchema), c
 // ── Course management ─────────────────────────────────────────────────────────
 router.post("/course", ...guard, createCourse);
 router.get("/course", ...guard, getAllCourses);
+router.get("/course/:id/module-count", ...guard, getCourseModuleCount);
 router.get("/course/:id", ...guard, getOneCourse);
 router.put("/course/:id", ...guard, updateCourse);
 router.delete("/course/:id", ...guard, removeCourse);

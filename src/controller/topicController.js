@@ -4,7 +4,7 @@ const Topic = require("../models/Topic");
 const Course = require("../models/Course");
 const asyncHandler = require("../middlewares/asyncHandler");
 const { sendResponse, sendError } = require("../utils/apiResponse");
-
+const Student = require("../models/Student");
 const MODULE_COLLECTION_MAP = {
   video: "videomodules",
   audio: "audiomodules",
@@ -46,7 +46,7 @@ const getAll = asyncHandler(async (req, res) => {
 
     if (course_id) {
       // Student must be enrolled in this course to view its topics
-      const Student = require("../models/Student");
+
       const student = await Student.findById(req.student._id).select("purchased_courses");
       const enrolled = (student?.purchased_courses || []).some(
         (id) => id.toString() === course_id,

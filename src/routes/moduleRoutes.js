@@ -6,6 +6,7 @@ const protectEditor = require("../middlewares/protectEditor");
 const protectUser = require("../middlewares/protectUser");
 const authorizeRoles = require("../middlewares/authorizeRoles");
 const { create, getBySubTopic, getOne, update, remove } = require("../controller/moduleController");
+const { getCourseModuleCount } = require("../controller/courseController");
 
 const fileField = (type) => {
   if (type === "video") return upload.single("videoFile");
@@ -14,6 +15,12 @@ const fileField = (type) => {
 };
 
 // Read — teacher or student
+// GET /module/course/:courseId/count  — module count summary for a course
+router.get("/course/:courseId/count", protectUser, async (req, res, next) => {
+  // Reuse the same handler — map courseId param to id param
+  req.params.id = req.params.courseId;
+  return getCourseModuleCount(req, res, next);
+});
 // GET /module/:type?subtopic_id=xxx
 router.get("/:type", protectUser, getBySubTopic);
 // GET /module/:type/:id

@@ -16,8 +16,7 @@ const InstituteSchema = new Schema(
       line2: { type: String, default: "" },
       pincode: { type: String },
       state: { type: String },
-      dist: { type: String },
-      taluka: { type: String },
+      city: { type: String },
       autorizedName: { type: String },
       autorizedPhono: { type: String },
       nearbyLandmarks: { type: String },
@@ -47,6 +46,9 @@ const InstituteSchema = new Schema(
     // ── Status ─────────────────────────────────────
     max_students: { type: Number, default: 500 },
     is_active: { type: Boolean, default: true },
+
+    // ── Email delivery tracking ────────────────────
+    credentials_email_sent_at: { type: Date, default: null },
   },
   { timestamps: true },
 );

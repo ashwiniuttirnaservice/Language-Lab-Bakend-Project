@@ -61,7 +61,7 @@ const create = asyncHandler(async (req, res) => {
       fileName: `${type}_${Date.now()}`,
       folderName: FOLDER_MAP[type],
     });
-    fs.unlink(req.file.path, () => {});
+    fs.unlink(req.file.path, () => { });
     const url = uploaded?.cdnUrl || uploaded?.fullS3URL || "";
 
     if (type === "video") {
@@ -121,7 +121,7 @@ const getOne = asyncHandler(async (req, res) => {
   if (!Model) return sendError(res, 400, false, `Invalid module type: ${type}`);
 
   const module = await Model.findById(id)
-    .populate("topic_id",     "title")
+    .populate("topic_id", "title")
     .populate("sub_topic_id", "title");
   if (!module || !module.is_active)
     return sendError(res, 404, false, "Module not found.");
@@ -157,7 +157,7 @@ const update = asyncHandler(async (req, res) => {
       fileName: `${type}_${Date.now()}`,
       folderName: FOLDER_MAP[type],
     });
-    fs.unlink(req.file.path, () => {});
+    fs.unlink(req.file.path, () => { });
     const url = uploaded?.cdnUrl || uploaded?.fullS3URL || "";
 
     if (type === "video")

@@ -1,3 +1,4 @@
+const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
 const mongoose = require("mongoose");
 
@@ -7,6 +8,7 @@ const License = require("../models/License");
 const asyncHandler = require("../middlewares/asyncHandler");
 const { sendResponse, sendError } = require("../utils/apiResponse");
 const uploadToAws = require("../utils/awsUpload");
+const emailService = require("../service/emailService");
 
 // POST /institute
 const create = asyncHandler(async (req, res) => {
@@ -75,6 +77,14 @@ const create = asyncHandler(async (req, res) => {
     created_by: req.admin._id,
   });
 
+  // Awaited (not thrown) — sendMail() never rejects, so this can't block/fail creation,
+  // but the admin panel needs to know whether the credentials email actually went out.
+  const email_sent = await emailService.sendInstituteCredentialsEmail(institute, password);
+  if (email_sent) {
+    institute.credentials_email_sent_at = new Date();
+    await institute.save();
+  }
+
   return sendResponse(res, 201, true, "Institute created successfully.", {
     id: institute._id,
     institute_name: institute.institute_name,
@@ -85,6 +95,7 @@ const create = asyncHandler(async (req, res) => {
     logo: institute.logo,
     address: institute.address,
     is_active: institute.is_active,
+    email_sent,
     license_id: institute.license_id || null,
   });
 });
@@ -516,6 +527,30 @@ const logout = asyncHandler(async (req, res) => {
   return sendResponse(res, 200, true, "Logged out successfully.", null);
 });
 
+// PUT /institute/:id/resend-credentials
+// Resets the institute's password to a new random one and emails it — the
+// original plain password is never stored, so a genuine "resend" isn't
+// possible; this is the secure equivalent (same pattern as a password reset).
+const resendCredentials = asyncHandler(async (req, res) => {
+  const institute = await Institute.findById(req.params.id);
+  if (!institute) return sendError(res, 404, false, "Institute not found.");
+
+  const newPassword = crypto.randomBytes(6).toString("hex");
+  institute.password = await bcrypt.hash(newPassword, 12);
+
+  const email_sent = await emailService.sendInstituteCredentialsEmail(institute, newPassword);
+  if (email_sent) institute.credentials_email_sent_at = new Date();
+
+  await institute.save();
+
+  return sendResponse(res, 200, true, "Credentials reset and emailed successfully.", {
+    id: institute._id,
+    email: institute.email,
+    password: newPassword, // shown ONCE — cannot be retrieved again
+    email_sent,
+  });
+});
+
 // GET /institute/public/:id
 // No auth — only safe, non-sensitive fields for public display (e.g. landing page).
 const getPublic = asyncHandler(async (req, res) => {
@@ -525,7 +560,7 @@ const getPublic = asyncHandler(async (req, res) => {
 
   const institute = await Institute.findOne(
     { _id: req.params.id, is_active: true },
-    "institute_name institute_code logo website address.state address.dist address.nearbyLandmarks",
+    "institute_name institute_code logo website address.state address.city address.nearbyLandmarks",
   ).lean();
 
   if (!institute) return sendError(res, 404, false, "Institute not found.");
@@ -541,6 +576,7 @@ module.exports = {
   remove,
   toggleStatus,
   assignLicense,
+  resendCredentials,
   login,
   logout,
   getMe,
