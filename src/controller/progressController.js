@@ -2,7 +2,7 @@ const { Types } = require("mongoose");
 
 const StudentProgress = require("../models/StudentProgress");
 const asyncHandler = require("../middlewares/asyncHandler");
-const { sendResponse } = require("../utils/apiResponse");
+const { sendResponse, sendError } = require("../utils/apiResponse");
 
 // GET /progress/me — student's own progress
 const getMyProgress = asyncHandler(async (req, res) => {
@@ -285,4 +285,208 @@ const getDashboardKPI = asyncHandler(async (req, res) => {
   });
 });
 
-module.exports = { getMyProgress, getStudentProgress, getDashboardKPI };
+// GET /progress/topic/:id — per-subtopic completion % for one topic (student's own progress)
+const getTopicProgress = asyncHandler(async (req, res) => {
+  const SubTopic = require("../models/SubTopic");
+  const VideoModule = require("../models/VideoModule");
+  const AudioModule = require("../models/AudioModule");
+  const TextModule = require("../models/TextModule");
+  const ExerciseModule = require("../models/ExerciseModule");
+  const VocabularyModule = require("../models/VocabularyModule");
+
+  const { id: topicId } = req.params;
+
+  const subTopics = await SubTopic.find({ topic_id: topicId, is_active: true })
+    .sort({ order: 1 })
+    .select("_id title order");
+  const subTopicIds = subTopics.map((s) => s._id);
+
+  if (!subTopicIds.length) {
+    return sendResponse(res, 200, true, "Progress fetched successfully.", {
+      topic_id: topicId,
+      percentage: 0,
+      total_modules: 0,
+      completed_modules: 0,
+      subtopics: [],
+    });
+  }
+
+  const moduleTypes = ["video", "audio", "text", "exercise", "vocabulary"];
+  const moduleResults = await Promise.all([
+    VideoModule.find({ sub_topic_id: { $in: subTopicIds }, is_active: true }).select("_id sub_topic_id"),
+    AudioModule.find({ sub_topic_id: { $in: subTopicIds }, is_active: true }).select("_id sub_topic_id"),
+    TextModule.find({ sub_topic_id: { $in: subTopicIds }, is_active: true }).select("_id sub_topic_id"),
+    ExerciseModule.find({ sub_topic_id: { $in: subTopicIds }, is_active: true }).select("_id sub_topic_id"),
+    VocabularyModule.find({ sub_topic_id: { $in: subTopicIds }, is_active: true }).select("_id sub_topic_id"),
+  ]);
+
+  const subtopicModulesMap = {};
+  subTopicIds.forEach((id) => {
+    subtopicModulesMap[id.toString()] = [];
+  });
+
+  const allActiveModuleIds = [];
+  moduleResults.forEach((modules, idx) => {
+    modules.forEach((mod) => {
+      const subIdStr = mod.sub_topic_id.toString();
+      if (subtopicModulesMap[subIdStr]) {
+        subtopicModulesMap[subIdStr].push(mod._id.toString());
+        allActiveModuleIds.push(mod._id);
+      }
+    });
+  });
+
+  const progressRecords = await StudentProgress.find({
+    student_id: req.student._id,
+    module_id: { $in: allActiveModuleIds },
+  }).select("module_id is_completed progress_percentage");
+
+  const progressMap = {};
+  progressRecords.forEach((rec) => {
+    progressMap[rec.module_id.toString()] =
+      rec.is_completed || rec.progress_percentage === 100;
+  });
+
+  let totalModules = 0;
+  let completedModules = 0;
+
+  const subtopics = subTopics.map((st) => {
+    const stIdStr = st._id.toString();
+    const modIds = subtopicModulesMap[stIdStr] || [];
+    const completedCount = modIds.filter((mId) => progressMap[mId]).length;
+
+    totalModules += modIds.length;
+    completedModules += completedCount;
+
+    return {
+      subtopic_id: st._id,
+      title: st.title,
+      order: st.order,
+      total_modules: modIds.length,
+      completed_modules: completedCount,
+      percentage: modIds.length ? Math.round((completedCount / modIds.length) * 100) : 0,
+    };
+  });
+
+  const percentage = totalModules ? Math.round((completedModules / totalModules) * 100) : 0;
+
+  return sendResponse(res, 200, true, "Progress fetched successfully.", {
+    topic_id: topicId,
+    percentage,
+    total_modules: totalModules,
+    completed_modules: completedModules,
+    subtopics,
+  });
+});
+
+// GET /progress/course/:id — per-topic completion % across one course (student's own progress)
+const getCourseProgress = asyncHandler(async (req, res) => {
+  const Course = require("../models/Course");
+  const Topic = require("../models/Topic");
+  const SubTopic = require("../models/SubTopic");
+  const VideoModule = require("../models/VideoModule");
+  const AudioModule = require("../models/AudioModule");
+  const TextModule = require("../models/TextModule");
+  const ExerciseModule = require("../models/ExerciseModule");
+  const VocabularyModule = require("../models/VocabularyModule");
+
+  const { id: courseId } = req.params;
+
+  const course = await Course.findById(courseId).select("topic_ids");
+  if (!course) return sendError(res, 404, false, "Course not found.");
+
+  const topics = await Topic.find({ _id: { $in: course.topic_ids }, is_active: true })
+    .sort({ order: 1 })
+    .select("_id title order");
+  const topicIds = topics.map((t) => t._id);
+
+  if (!topicIds.length) {
+    return sendResponse(res, 200, true, "Progress fetched successfully.", {
+      course_id: courseId,
+      percentage: 0,
+      total_modules: 0,
+      completed_modules: 0,
+      topics: [],
+    });
+  }
+
+  const subTopics = await SubTopic.find({ topic_id: { $in: topicIds }, is_active: true }).select("_id topic_id");
+  const subTopicIds = subTopics.map((s) => s._id);
+  const subtopicToTopic = {};
+  subTopics.forEach((s) => {
+    subtopicToTopic[s._id.toString()] = s.topic_id.toString();
+  });
+
+  const moduleResults = await Promise.all([
+    VideoModule.find({ sub_topic_id: { $in: subTopicIds }, is_active: true }).select("_id sub_topic_id"),
+    AudioModule.find({ sub_topic_id: { $in: subTopicIds }, is_active: true }).select("_id sub_topic_id"),
+    TextModule.find({ sub_topic_id: { $in: subTopicIds }, is_active: true }).select("_id sub_topic_id"),
+    ExerciseModule.find({ sub_topic_id: { $in: subTopicIds }, is_active: true }).select("_id sub_topic_id"),
+    VocabularyModule.find({ sub_topic_id: { $in: subTopicIds }, is_active: true }).select("_id sub_topic_id"),
+  ]);
+
+  const topicModulesMap = {};
+  topicIds.forEach((id) => {
+    topicModulesMap[id.toString()] = [];
+  });
+
+  const allActiveModuleIds = [];
+  moduleResults.forEach((modules) => {
+    modules.forEach((mod) => {
+      const topicIdStr = subtopicToTopic[mod.sub_topic_id.toString()];
+      if (topicIdStr && topicModulesMap[topicIdStr]) {
+        topicModulesMap[topicIdStr].push(mod._id.toString());
+        allActiveModuleIds.push(mod._id);
+      }
+    });
+  });
+
+  const progressRecords = await StudentProgress.find({
+    student_id: req.student._id,
+    module_id: { $in: allActiveModuleIds },
+  }).select("module_id is_completed progress_percentage");
+
+  const progressMap = {};
+  progressRecords.forEach((rec) => {
+    progressMap[rec.module_id.toString()] =
+      rec.is_completed || rec.progress_percentage === 100;
+  });
+
+  let totalModules = 0;
+  let completedModules = 0;
+
+  const topicsOut = topics.map((t) => {
+    const modIds = topicModulesMap[t._id.toString()] || [];
+    const completedCount = modIds.filter((mId) => progressMap[mId]).length;
+
+    totalModules += modIds.length;
+    completedModules += completedCount;
+
+    return {
+      topic_id: t._id,
+      title: t.title,
+      order: t.order,
+      total_modules: modIds.length,
+      completed_modules: completedCount,
+      percentage: modIds.length ? Math.round((completedCount / modIds.length) * 100) : 0,
+    };
+  });
+
+  const percentage = totalModules ? Math.round((completedModules / totalModules) * 100) : 0;
+
+  return sendResponse(res, 200, true, "Progress fetched successfully.", {
+    course_id: courseId,
+    percentage,
+    total_modules: totalModules,
+    completed_modules: completedModules,
+    topics: topicsOut,
+  });
+});
+
+module.exports = {
+  getMyProgress,
+  getStudentProgress,
+  getDashboardKPI,
+  getTopicProgress,
+  getCourseProgress,
+};

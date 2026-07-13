@@ -4,17 +4,25 @@ const { Schema, model } = mongoose;
 const ExerciseModuleSchema = new Schema(
   {
     topic_id: { type: Schema.Types.ObjectId, ref: "Topic", required: true },
-    sub_topic_id: { type: Schema.Types.ObjectId, ref: "SubTopic", required: true },
+    sub_topic_id: {
+      type: Schema.Types.ObjectId,
+      ref: "SubTopic",
+      required: true,
+    },
     title: { type: String, required: true, trim: true },
     description: { type: String },
     order: { type: Number, default: 0 },
     module_type: { type: String, default: "exercise", immutable: true },
     exercise_type: {
       type: String,
-      enum: ["mcq", "fill_blank", "true_false", "match", "reorder"],
+
       required: true,
     },
-    difficulty: { type: String, enum: ["easy", "medium", "hard"], default: "easy" },
+    difficulty: {
+      type: String,
+      enum: ["easy", "medium", "hard"],
+      default: "easy",
+    },
 
     questions: [
       {

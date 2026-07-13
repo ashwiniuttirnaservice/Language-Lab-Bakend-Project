@@ -29,6 +29,7 @@ const {
   getMe,
   updateMe,
   getPurchasedCourses,
+  getDashboard,
   getPublic,
 } = require("../controller/instituteController");
 
@@ -68,6 +69,7 @@ router.get(
 // ── Institute (self) ──────────────────────────────────────────────────────────
 router.post("/logout", protectInstitute, authorizeRoles("institute"), logout);
 router.get("/me", protectInstitute, authorizeRoles("institute"), getMe);
+router.get("/me/dashboard", protectInstitute, authorizeRoles("institute"), getDashboard);
 router.get("/me/courses", protectInstitute, authorizeRoles("institute"), getPurchasedCourses);
 router.get(
   "/me/licenses",

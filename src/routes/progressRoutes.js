@@ -5,11 +5,19 @@ const protectStudent = require("../middlewares/protectStudent");
 const protectEditor = require("../middlewares/protectEditor");
 const protectInstitute = require("../middlewares/protectInstitute");
 const authorizeRoles = require("../middlewares/authorizeRoles");
-const { getMyProgress, getStudentProgress, getDashboardKPI } = require("../controller/progressController");
+const {
+  getMyProgress,
+  getStudentProgress,
+  getDashboardKPI,
+  getTopicProgress,
+  getCourseProgress,
+} = require("../controller/progressController");
 
 // Student — own progress
 router.get("/me", protectStudent, authorizeRoles("student"), getMyProgress);
 router.get("/dashboard-kpi", protectStudent, authorizeRoles("student"), getDashboardKPI);
+router.get("/course/:id", protectStudent, authorizeRoles("student"), getCourseProgress);
+router.get("/topic/:id", protectStudent, authorizeRoles("student"), getTopicProgress);
 
 // Editor — view a student's progress
 router.get("/student/:id", protectEditor, authorizeRoles("editor"), getStudentProgress);

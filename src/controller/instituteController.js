@@ -5,6 +5,8 @@ const mongoose = require("mongoose");
 const Institute = require("../models/Institute");
 const Course = require("../models/Course");
 const License = require("../models/License");
+const Student = require("../models/Student");
+const StudentProgress = require("../models/StudentProgress");
 const asyncHandler = require("../middlewares/asyncHandler");
 const { sendResponse, sendError } = require("../utils/apiResponse");
 const uploadToAws = require("../utils/awsUpload");
@@ -522,6 +524,137 @@ const getPurchasedCourses = asyncHandler(async (req, res) => {
   });
 });
 
+// GET /institute/me/dashboard
+const getDashboard = asyncHandler(async (req, res) => {
+  const { Types } = require("mongoose");
+  const instituteId = new Types.ObjectId(req.institute._id);
+
+  const institute = await Institute.findById(instituteId).select(
+    "institute_name course_id license_ids license_count max_students createdAt",
+  );
+  if (!institute) return sendError(res, 404, false, "Institute not found.");
+
+  const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+
+  const [
+    totalStudents,
+    newStudentsThisWeek,
+    studentStatusCounts,
+    coursesLicensedCount,
+    licenses,
+    progressStats,
+    recentStudents,
+    recentCompletions,
+  ] = await Promise.all([
+    Student.countDocuments({ institute_id: instituteId }),
+    Student.countDocuments({ institute_id: instituteId, createdAt: { $gte: weekAgo } }),
+    Student.aggregate([
+      { $match: { institute_id: instituteId } },
+      { $group: { _id: "$status", count: { $sum: 1 } } },
+    ]),
+    Course.countDocuments({ _id: { $in: institute.course_id }, is_active: true }),
+    License.find({ _id: { $in: institute.license_ids } }).select(
+      "status total_seats active_sessions",
+    ),
+    StudentProgress.aggregate([
+      { $match: { institute_id: instituteId } },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: 1 },
+          completed: { $sum: { $cond: ["$is_completed", 1, 0] } },
+        },
+      },
+    ]),
+    Student.find({ institute_id: instituteId })
+      .sort({ createdAt: -1 })
+      .limit(5)
+      .select("full_name createdAt")
+      .lean(),
+    StudentProgress.find({ institute_id: instituteId, is_completed: true })
+      .sort({ completed_at: -1 })
+      .limit(5)
+      .populate("student_id", "full_name")
+      .populate("topic_id", "title")
+      .select("completed_at student_id topic_id")
+      .lean(),
+  ]);
+
+  // ── Student status breakdown ───────────────────────────────────
+  const statusBreakdown = { active: 0, inactive: 0, suspended: 0 };
+  studentStatusCounts.forEach(({ _id, count }) => {
+    if (_id in statusBreakdown) statusBreakdown[_id] = count;
+  });
+
+  // ── License / seat usage ───────────────────────────────────────
+  const totalSeats = licenses.reduce((sum, l) => sum + l.total_seats, 0);
+  const usedSeats = licenses.reduce((sum, l) => sum + l.active_sessions, 0);
+  const activeLicenses = licenses.filter((l) => l.status === "active").length;
+
+  // ── Completion rate ─────────────────────────────────────────────
+  const { total: progressTotal = 0, completed: progressCompleted = 0 } =
+    progressStats[0] || {};
+  const completionRate =
+    progressTotal > 0 ? Math.round((progressCompleted / progressTotal) * 100) : 0;
+
+  // ── Student growth — cumulative enrolled students, last 6 months ─
+  const now = new Date();
+  const studentGrowth = [];
+  for (let i = 5; i >= 0; i -= 1) {
+    const monthIndex = now.getMonth() - i;
+    const monthStart = new Date(now.getFullYear(), monthIndex, 1);
+    const nextMonthStart = new Date(now.getFullYear(), monthIndex + 1, 1);
+    // eslint-disable-next-line no-await-in-loop
+    const count = await Student.countDocuments({
+      institute_id: instituteId,
+      createdAt: { $lt: nextMonthStart },
+    });
+    studentGrowth.push({
+      month: monthStart.toLocaleString("en-US", { month: "short" }),
+      students: count,
+    });
+  }
+
+  // ── Recent activity feed ────────────────────────────────────────
+  const recentActivity = [
+    ...recentStudents.map((s) => ({
+      type: "student_registered",
+      message: `${s.full_name} registered`,
+      timestamp: s.createdAt,
+    })),
+    ...recentCompletions.map((p) => ({
+      type: "course_completed",
+      message: `${p.student_id?.full_name || "A student"} completed ${p.topic_id?.title || "a topic"}`,
+      timestamp: p.completed_at,
+    })),
+  ]
+    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+    .slice(0, 8);
+
+  return sendResponse(res, 200, true, "Dashboard fetched successfully.", {
+    institute_name: institute.institute_name,
+    enrolled_students: {
+      total: totalStudents,
+      new_this_week: newStudentsThisWeek,
+    },
+    courses_licensed: {
+      total: coursesLicensedCount,
+    },
+    license_usage: {
+      total_seats: totalSeats || institute.license_count,
+      used_seats: usedSeats,
+      active_licenses: activeLicenses,
+    },
+    completion_rate: completionRate,
+    student_growth: studentGrowth,
+    student_status_breakdown: {
+      ...statusBreakdown,
+      total: totalStudents,
+    },
+    recent_activity: recentActivity,
+  });
+});
+
 // POST /institute/logout
 const logout = asyncHandler(async (req, res) => {
   return sendResponse(res, 200, true, "Logged out successfully.", null);
@@ -582,5 +715,6 @@ module.exports = {
   getMe,
   updateMe,
   getPurchasedCourses,
+  getDashboard,
   getPublic,
 };
