@@ -11,6 +11,7 @@ router.use("/topic", require("./routes/topicRoutes"));
 router.use("/subtopic", require("./routes/subTopicRoutes"));
 router.use("/module", require("./routes/moduleRoutes"));
 router.use("/module/exercise", require("./routes/exerciseAttemptRoutes"));
+router.use("/upload/chunk", require("./routes/chunkUploadRoutes"));
 router.use("/activity", require("./routes/activityRoutes"));
 router.use("/progress", require("./routes/progressRoutes"));
 router.use("/attendance", require("./routes/attendanceRoutes"));

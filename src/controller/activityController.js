@@ -80,7 +80,7 @@ const log = asyncHandler(async (req, res) => {
 const getMyActivity = asyncHandler(async (req, res) => {
   const logs = await ActivityLog.find({ student_id: req.student._id })
     .sort({ logged_at: -1 })
-    .limit(100);
+    .limit(500);
 
   return sendResponse(res, 200, true, "Activity fetched successfully.", logs);
 });

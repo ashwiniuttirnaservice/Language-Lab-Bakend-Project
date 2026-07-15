@@ -336,6 +336,35 @@ const login = asyncHandler(async (req, res) => {
 
   const now = new Date();
 
+  // If the student already has a live, non-expired session, hand back that same
+  // token instead of invalidating it. Without this, every repeated/duplicate
+  // login call (multiple tabs, a frontend retry, a double-mount effect, etc.)
+  // kills the session the previous call just issued, so that token dies within
+  // seconds even though its JWT exp is still days away.
+  const existingSession = await Session.findOne({
+    student_id: student._id,
+    is_active: true,
+    expires_at: { $gt: now },
+    token: { $ne: null },
+  }).sort({ logged_in_at: -1 });
+
+  if (existingSession) {
+    return sendResponse(res, 200, true, `Welcome back, ${student.full_name}!`, {
+      token: existingSession.token,
+      student: {
+        id: student._id,
+        full_name: student.full_name,
+        email: student.email,
+        role: student.role,
+        roll_no: student.roll_no,
+        institute_id: student.institute_id,
+        institute_name: institute.institute_name,
+        profilePhoto: student.profilePhoto,
+        last_login: student.last_login,
+      },
+    });
+  }
+
   // Close ALL of this student's active sessions (there may be multiple from repeated logins).
   await Session.updateMany(
     { student_id: student._id, is_active: true },

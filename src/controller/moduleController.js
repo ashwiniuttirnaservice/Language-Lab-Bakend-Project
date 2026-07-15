@@ -35,7 +35,9 @@ const parseJsonField = (value) => {
 // Students must not see correct answers before submitting an attempt.
 const stripAnswers = (doc) => {
   const plain = doc.toObject();
-  plain.questions = plain.questions.map(({ correct_answer, explanation, ...q }) => q);
+  plain.questions = plain.questions.map(
+    ({ correct_answer, explanation, ...q }) => q,
+  );
   return plain;
 };
 
@@ -90,14 +92,27 @@ const getBySubTopic = asyncHandler(async (req, res) => {
   const Model = MODEL_MAP[type];
   if (!Model) return sendError(res, 400, false, `Invalid module type: ${type}`);
 
-  const { subtopic_id } = req.query;
-  if (!subtopic_id)
-    return sendError(res, 400, false, "subtopic_id query param required.");
+  const { subtopic_id, content_module_id } = req.query;
+  if (!subtopic_id && !content_module_id)
+    return sendError(
+      res,
+      400,
+      false,
+      "subtopic_id or content_module_id query param required.",
+    );
 
-  const modules = await Model.find({
-    sub_topic_id: subtopic_id,
-    is_active: true,
-  })
+  const filter = { is_active: true };
+  if (subtopic_id) filter.sub_topic_id = subtopic_id;
+  if (content_module_id) {
+    filter.content_module_id = content_module_id;
+  } else if (type === "exercise" && req.student) {
+    // Exercises attached to a specific lesson module (via content_module_id)
+    // should only surface through that lesson's own "Start Exercise" flow,
+    // not in the student's general subtopic-wide exercise list.
+    filter.content_module_id = null;
+  }
+
+  const modules = await Model.find(filter)
     .populate("topic_id", "title")
     .populate("sub_topic_id", "title")
     .sort({ order: 1 });
@@ -121,13 +136,19 @@ const getOne = asyncHandler(async (req, res) => {
   if (!Model) return sendError(res, 400, false, `Invalid module type: ${type}`);
 
   const module = await Model.findById(id)
-    .populate("topic_id",     "title")
+    .populate("topic_id", "title")
     .populate("sub_topic_id", "title");
   if (!module || !module.is_active)
     return sendError(res, 404, false, "Module not found.");
 
   if (type === "exercise" && req.student) {
-    return sendResponse(res, 200, true, "Module fetched successfully.", stripAnswers(module));
+    return sendResponse(
+      res,
+      200,
+      true,
+      "Module fetched successfully.",
+      stripAnswers(module),
+    );
   }
 
   return sendResponse(res, 200, true, "Module fetched successfully.", module);

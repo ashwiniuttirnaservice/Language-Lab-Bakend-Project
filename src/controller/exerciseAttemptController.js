@@ -1,5 +1,6 @@
 const ExerciseModule = require("../models/ExerciseModule");
 const StudentModuleAttempt = require("../models/StudentModuleAttempt");
+const StudentProgress = require("../models/StudentProgress");
 const asyncHandler = require("../middlewares/asyncHandler");
 const { sendResponse, sendError } = require("../utils/apiResponse");
 
@@ -77,6 +78,27 @@ const submit = asyncHandler(async (req, res) => {
     time_spent_sec: time_spent_sec || 0,
     is_passed: isPassed,
   });
+
+  // Mirrors the *_complete handling in activityController — every submit
+  // (pass or fail) counts the exercise as attempted/complete for progress,
+  // so the frontend no longer has to fire a second POST /activity to mark it done.
+  await StudentProgress.findOneAndUpdate(
+    { student_id: req.student._id, module_id: exercise._id, subtopic_id: exercise.sub_topic_id },
+    {
+      $set: {
+        progress_percentage: 100,
+        is_completed: true,
+        completed_at: new Date(),
+        last_accessed: new Date(),
+        score,
+        institute_id: req.student.institute_id,
+        license_id: req.student.license_id,
+        topic_id: exercise.topic_id,
+        module_type: "exercise",
+      },
+    },
+    { upsert: true, new: true },
+  );
 
   return sendResponse(res, 201, true, "Exercise submitted successfully.", {
     attempt,

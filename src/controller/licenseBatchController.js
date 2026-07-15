@@ -6,6 +6,7 @@ const Institute = require("../models/Institute");
 const Session = require("../models/Session");
 const asyncHandler = require("../middlewares/asyncHandler");
 const { sendResponse, sendError } = require("../utils/apiResponse");
+const emailService = require("../service/emailService");
 
 function hmacSign(pattern) {
   return crypto
@@ -58,7 +59,10 @@ const generateBatch = asyncHandler(async (req, res) => {
     return sendError(res, 400, false, "start_date and expiry_date are required.");
   }
 
-  const institute = await Institute.findById(req.params.id);
+  const institute = await Institute.findById(req.params.id).populate(
+    "course_id",
+    "course_name",
+  );
   if (!institute) return sendError(res, 404, false, "Institute not found.");
   if (!institute.is_active) return sendError(res, 400, false, "Institute is inactive.");
 
@@ -70,6 +74,7 @@ const generateBatch = asyncHandler(async (req, res) => {
   }
 
   const generatedKeys = [];
+  const createdLicenseIds = [];
 
   for (let i = 1; i <= license_count; i++) {
     const keyIndex = institute.license_count + i;
@@ -110,6 +115,8 @@ const generateBatch = asyncHandler(async (req, res) => {
       $push: { license_ids: license._id },
     });
 
+    createdLicenseIds.push(license._id);
+
     generatedKeys.push({
       key_index: keyIndex,
       license_code: licenseCode,
@@ -125,6 +132,20 @@ const generateBatch = asyncHandler(async (req, res) => {
     $inc: { license_count: license_count },
   });
 
+  // Awaited (not thrown) — sendMail() never rejects, so this can't block/fail generation,
+  // but the admin panel needs to know whether the purchase confirmation email actually went out.
+  const email_sent = await emailService.sendLicensePurchaseEmail({
+    institute,
+    courses: institute.course_id,
+    licenses: generatedKeys,
+  });
+  if (email_sent) {
+    await License.updateMany(
+      { _id: { $in: createdLicenseIds } },
+      { $set: { purchase_email_sent_at: new Date() } },
+    );
+  }
+
   return sendResponse(res, 201, true, "Licenses generated successfully.", {
     institute_id: institute._id,
     institute_name: institute.institute_name,
@@ -133,6 +154,7 @@ const generateBatch = asyncHandler(async (req, res) => {
     start_date,
     expiry_date,
     licenses: generatedKeys,
+    email_sent,
     warning: "Passwords shown ONCE only. Store them securely. They cannot be retrieved again.",
   });
 });

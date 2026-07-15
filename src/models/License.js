@@ -44,6 +44,9 @@ const LicenseSchema = new Schema(
       default: "active",
     },
 
+    // ── Email delivery tracking ────────────────────
+    purchase_email_sent_at: { type: Date, default: null },
+
     // ── Open LLM metadata ──────────────────────────
     llm_metadata: {
       model_used: { type: String },

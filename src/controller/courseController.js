@@ -1,4 +1,11 @@
 const Course = require("../models/Course");
+const Topic = require("../models/Topic");
+const SubTopic = require("../models/SubTopic");
+const VideoModule = require("../models/VideoModule");
+const AudioModule = require("../models/AudioModule");
+const TextModule = require("../models/TextModule");
+const ExerciseModule = require("../models/ExerciseModule");
+const VocabularyModule = require("../models/VocabularyModule");
 const asyncHandler = require("../middlewares/asyncHandler");
 const { sendResponse, sendError } = require("../utils/apiResponse");
 
@@ -75,4 +82,49 @@ const remove = asyncHandler(async (req, res) => {
   return sendResponse(res, 200, true, "Course deactivated successfully.");
 });
 
-module.exports = { create, getAll, getOne, update, remove };
+// GET /api/super-admin/course/:id/module-count
+// Returns the count of each module type (video, audio, text, vocabulary, exercise)
+// for all subtopics that belong to the given course's topics.
+const getCourseModuleCount = asyncHandler(async (req, res) => {
+  const course = await Course.findById(req.params.id).select("course_name course_code topic_ids");
+  if (!course) return sendError(res, 404, false, "Course not found.");
+
+  const topicIds = course.topic_ids;
+
+  // Find all active subtopics linked to those topics
+  const subTopics = await SubTopic.find(
+    { topic_id: { $in: topicIds }, is_active: true },
+    "_id"
+  );
+  const subTopicIds = subTopics.map((st) => st._id);
+
+  // Count all active modules in parallel
+  const [videoCount, audioCount, textCount, vocabularyCount, exerciseCount] =
+    await Promise.all([
+      VideoModule.countDocuments({ sub_topic_id: { $in: subTopicIds }, is_active: true }),
+      AudioModule.countDocuments({ sub_topic_id: { $in: subTopicIds }, is_active: true }),
+      TextModule.countDocuments({ sub_topic_id: { $in: subTopicIds }, is_active: true }),
+      VocabularyModule.countDocuments({ sub_topic_id: { $in: subTopicIds }, is_active: true }),
+      ExerciseModule.countDocuments({ sub_topic_id: { $in: subTopicIds }, is_active: true }),
+    ]);
+
+  const total = videoCount + audioCount + textCount + vocabularyCount + exerciseCount;
+
+  return sendResponse(res, 200, true, "Course module count fetched successfully.", {
+    course_id: course._id,
+    course_name: course.course_name,
+    course_code: course.course_code,
+    topic_count: topicIds.length,
+    subtopic_count: subTopicIds.length,
+    module_counts: {
+      video: videoCount,
+      audio: audioCount,
+      text: textCount,
+      vocabulary: vocabularyCount,
+      exercise: exerciseCount,
+    },
+    total_modules: total,
+  });
+});
+
+module.exports = { create, getAll, getOne, update, remove, getCourseModuleCount };

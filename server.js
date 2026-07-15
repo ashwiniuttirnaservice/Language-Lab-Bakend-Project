@@ -37,5 +37,7 @@ app.get("/", (req, res) => res.json({ message: "Language Lab API Running" }));
 
 app.use("/api", require("./src/index"));
 
+app.use(require("./src/middlewares/errorHandler"));
+
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));

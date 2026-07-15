@@ -31,7 +31,7 @@ async function uploadToAws({ file, fileName, folderName }) {
       path.extname(file.originalname || "").replace(".", "") ||
       "bin";
 
-    const dataFile = fs.readFileSync(file.path);
+    const dataFile = fs.createReadStream(file.path);
     const formData = new FormData();
 
     formData.append("fileName", fileName);
@@ -47,13 +47,26 @@ async function uploadToAws({ file, fileName, folderName }) {
     const response = await axios.post(
       "https://aws-upload.uttirna.in/api/aws/upload",
       formData,
-      { headers },
+      {
+        headers,
+        maxBodyLength: Infinity,
+        maxContentLength: Infinity,
+      }
     );
 
     return response.data?.data;
   } catch (error) {
     console.error("AWS Upload Error:", error.response?.data || error.message);
     throw new Error("Failed to upload file to AWS");
+  } finally {
+
+    if (file?.path && fs.existsSync(file.path)) {
+      try {
+        fs.unlinkSync(file.path);
+      } catch (cleanupError) {
+        console.error("Failed to delete temp file:", cleanupError.message);
+      }
+    }
   }
 }
 

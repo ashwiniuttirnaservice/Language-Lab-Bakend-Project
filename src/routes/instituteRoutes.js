@@ -23,11 +23,13 @@ const {
   remove,
   toggleStatus,
   assignLicense,
+  resendCredentials,
   login,
   logout,
   getMe,
   updateMe,
   getPurchasedCourses,
+  getDashboard,
   getPublic,
 } = require("../controller/instituteController");
 
@@ -67,6 +69,7 @@ router.get(
 // ── Institute (self) ──────────────────────────────────────────────────────────
 router.post("/logout", protectInstitute, authorizeRoles("institute"), logout);
 router.get("/me", protectInstitute, authorizeRoles("institute"), getMe);
+router.get("/me/dashboard", protectInstitute, authorizeRoles("institute"), getDashboard);
 router.get("/me/courses", protectInstitute, authorizeRoles("institute"), getPurchasedCourses);
 router.get(
   "/me/licenses",
@@ -117,6 +120,12 @@ router.put(
   authorizeRoles("super_admin"),
   validateSchema(assignLicenseSchema),
   assignLicense,
+);
+router.put(
+  "/:id/resend-credentials",
+  protectSuperAdmin,
+  authorizeRoles("super_admin"),
+  resendCredentials,
 );
 
 module.exports = router;

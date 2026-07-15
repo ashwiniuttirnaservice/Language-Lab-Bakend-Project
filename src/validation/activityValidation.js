@@ -10,6 +10,7 @@ const logActivitySchema = Joi.object({
   activity_type: Joi.string().valid(
     "video_play", "video_pause", "video_forward", "video_backward", "video_complete",
     "audio_play", "audio_pause", "audio_replay", "audio_complete",
+    "text_start", "text_complete",
     "exercise_start", "exercise_submit", "exercise_complete", "exercise_skip",
     "vocabulary_start", "vocabulary_submit", "vocabulary_complete", "vocabulary_skip",
     "attendance_marked", "ai_query",
