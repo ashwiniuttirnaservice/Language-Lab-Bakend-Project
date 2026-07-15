@@ -46,15 +46,30 @@ const createTextModuleSchema = Joi.object({
 
 const createExerciseModuleSchema = Joi.object({
   ...baseModuleSchema,
-  exercise_type: Joi.string().valid("mcq", "fill_blank", "true_false", "match", "reorder").required(),
+  content_module_id: objectId,
+  exercise_type: Joi.string()
+    .valid("mcq", "fill_blank", "true_false", "short_answer", "match", "reorder", "spell_word")
+    .required(),
   difficulty: Joi.string().valid("easy", "medium", "hard"),
   shuffle_questions: Joi.boolean(),
   shuffle_options: Joi.boolean(),
   show_explanation: Joi.boolean(),
   questions: Joi.array().items(Joi.object({
     question_text: Joi.string().required(),
-    question_type: Joi.string().valid("mcq", "fill_blank", "true_false", "match", "reorder"),
+    question_type: Joi.string().valid(
+      "mcq",
+      "fill_blank",
+      "true_false",
+      "short_answer",
+      "match",
+      "reorder",
+      "spell_word",
+    ),
     options: Joi.array().items(Joi.string()),
+    match_pairs: Joi.array().items(Joi.object({
+      left: Joi.string(),
+      right: Joi.string(),
+    })),
     correct_answer: Joi.string().required(),
     explanation: Joi.string(),
     hint: Joi.string(),

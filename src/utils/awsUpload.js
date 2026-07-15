@@ -59,7 +59,7 @@ async function uploadToAws({ file, fileName, folderName }) {
     console.error("AWS Upload Error:", error.response?.data || error.message);
     throw new Error("Failed to upload file to AWS");
   } finally {
-    // Delete the temporary file from the server disk after upload is done or if it fails
+
     if (file?.path && fs.existsSync(file.path)) {
       try {
         fs.unlinkSync(file.path);
