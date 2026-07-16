@@ -42,7 +42,7 @@ const ExerciseModuleSchema = new Schema(
             "true_false",
             "short_answer",
             "match",
-            "reorder",
+            "recorder",
             "spell_word",
           ],
         },
