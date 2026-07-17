@@ -42,10 +42,25 @@ const VocabularyModuleSchema = new Schema(
         question_text: { type: String, required: true },
         question_type: {
           type: String,
-          enum: ["mcq", "fill_blank", "match_meaning", "spell_word"],
+          enum: [
+            "mcq",
+            "fill_blank",
+            "true_false",
+            "short_answer",
+            "match",
+            "recorder",
+            "spell_word",
+          ],
         },
         word_ref: { type: String },
         options: [String],
+        match_pairs: [
+          {
+            left: { type: String },
+            right: { type: String },
+            _id: false,
+          },
+        ],
         correct_answer: { type: String, required: true },
         explanation: { type: String },
         marks: { type: Number, default: 1 },

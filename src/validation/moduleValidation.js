@@ -13,15 +13,42 @@ const baseModuleSchema = {
   max_attempts: Joi.number().integer().min(1),
 };
 
+const questionTypeSchema = Joi.object({
+  question_text: Joi.string().required(),
+  question_type: Joi.string().valid(
+    "mcq",
+    "fill_blank",
+    "true_false",
+    "short_answer",
+    "match",
+    "recorder",
+    "spell_word",
+  ),
+  options: Joi.array().items(Joi.string()),
+  match_pairs: Joi.array().items(Joi.object({
+    left: Joi.string(),
+    right: Joi.string(),
+  })),
+  correct_answer: Joi.string().required(),
+  explanation: Joi.string(),
+  marks: Joi.number(),
+});
+
 const createVideoModuleSchema = Joi.object({
   ...baseModuleSchema,
   // video object sent as JSON string in multipart form
+  questions: Joi.array().items(questionTypeSchema.keys({
+    timestamp_sec: Joi.number(),
+  })),
 });
 
 const createAudioModuleSchema = Joi.object({
   ...baseModuleSchema,
   allow_replay: Joi.boolean(),
   replay_limit: Joi.number().integer().min(0),
+  questions: Joi.array().items(questionTypeSchema.keys({
+    timestamp_sec: Joi.number(),
+  })),
 });
 
 const createTextModuleSchema = Joi.object({
@@ -33,14 +60,8 @@ const createTextModuleSchema = Joi.object({
     level: Joi.string(),
     source: Joi.string(),
   }).required(),
-  questions: Joi.array().items(Joi.object({
-    question_text: Joi.string().required(),
-    question_type: Joi.string().valid("mcq", "fill_blank", "true_false", "short_answer"),
-    options: Joi.array().items(Joi.string()),
-    correct_answer: Joi.string().required(),
-    explanation: Joi.string(),
+  questions: Joi.array().items(questionTypeSchema.keys({
     paragraph_ref: Joi.number().integer(),
-    marks: Joi.number(),
   })),
 });
 
@@ -48,32 +69,14 @@ const createExerciseModuleSchema = Joi.object({
   ...baseModuleSchema,
   content_module_id: objectId,
   exercise_type: Joi.string()
-    .valid("mcq", "fill_blank", "true_false", "short_answer", "match", "reorder", "spell_word")
+    .valid("mcq", "fill_blank", "true_false", "short_answer", "match", "recorder", "spell_word")
     .required(),
   difficulty: Joi.string().valid("easy", "medium", "hard"),
   shuffle_questions: Joi.boolean(),
   shuffle_options: Joi.boolean(),
   show_explanation: Joi.boolean(),
-  questions: Joi.array().items(Joi.object({
-    question_text: Joi.string().required(),
-    question_type: Joi.string().valid(
-      "mcq",
-      "fill_blank",
-      "true_false",
-      "short_answer",
-      "match",
-      "reorder",
-      "spell_word",
-    ),
-    options: Joi.array().items(Joi.string()),
-    match_pairs: Joi.array().items(Joi.object({
-      left: Joi.string(),
-      right: Joi.string(),
-    })),
-    correct_answer: Joi.string().required(),
-    explanation: Joi.string(),
+  questions: Joi.array().items(questionTypeSchema.keys({
     hint: Joi.string(),
-    marks: Joi.number(),
     negative_marks: Joi.number(),
   })).min(1).required(),
 });
@@ -92,10 +95,23 @@ const createVocabularyModuleSchema = Joi.object({
   })).min(1).required(),
   questions: Joi.array().items(Joi.object({
     question_text: Joi.string().required(),
-    question_type: Joi.string().valid("mcq", "fill_blank", "match_meaning", "spell_word"),
+    question_type: Joi.string().valid(
+      "mcq",
+      "fill_blank",
+      "true_false",
+      "short_answer",
+      "match",
+      "recorder",
+      "spell_word",
+    ),
     word_ref: Joi.string(),
     options: Joi.array().items(Joi.string()),
+    match_pairs: Joi.array().items(Joi.object({
+      left: Joi.string(),
+      right: Joi.string(),
+    })),
     correct_answer: Joi.string().required(),
+    explanation: Joi.string(),
     marks: Joi.number(),
   })),
 });

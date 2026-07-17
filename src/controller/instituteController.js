@@ -106,7 +106,7 @@ const create = asyncHandler(async (req, res) => {
 const getAll = asyncHandler(async (req, res) => {
   const institutes = await Institute.aggregate([
     { $match: { is_active: true } },
-    { $sort: { createdAt: -1 } },
+    { $sort: { createdAt: 1 } },
     {
       $lookup: {
         from: "superadmins",
