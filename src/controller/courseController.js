@@ -32,7 +32,7 @@ const create = asyncHandler(async (req, res) => {
 // GET /api/super-admin/course
 const getAll = asyncHandler(async (req, res) => {
   const courses = await Course.find()
-    .sort({ createdAt: -1 })
+    .sort({ createdAt: 1 })
     .select("-__v");
 
   return sendResponse(res, 200, true, "Courses fetched successfully.", courses);

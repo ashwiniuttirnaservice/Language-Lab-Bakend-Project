@@ -95,10 +95,23 @@ const createVocabularyModuleSchema = Joi.object({
   })).min(1).required(),
   questions: Joi.array().items(Joi.object({
     question_text: Joi.string().required(),
-    question_type: Joi.string().valid("mcq", "fill_blank", "match_meaning", "spell_word"),
+    question_type: Joi.string().valid(
+      "mcq",
+      "fill_blank",
+      "true_false",
+      "short_answer",
+      "match",
+      "recorder",
+      "spell_word",
+    ),
     word_ref: Joi.string(),
     options: Joi.array().items(Joi.string()),
+    match_pairs: Joi.array().items(Joi.object({
+      left: Joi.string(),
+      right: Joi.string(),
+    })),
     correct_answer: Joi.string().required(),
+    explanation: Joi.string(),
     marks: Joi.number(),
   })),
 });

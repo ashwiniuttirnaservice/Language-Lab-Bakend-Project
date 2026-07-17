@@ -88,7 +88,7 @@ const getAllForAdmin = asyncHandler(async (req, res) => {
 
   const students = await Student.aggregate([
     { $match: matchStage },
-    { $sort: { createdAt: -1 } },
+    { $sort: { createdAt: 1 } },
     {
       $lookup: {
         from: "institutes",
@@ -143,7 +143,7 @@ const getAll = asyncHandler(async (req, res) => {
 
   const students = await Student.aggregate([
     { $match: matchStage },
-    { $sort: { createdAt: -1 } },
+    { $sort: { createdAt: 1 } },
     {
       $lookup: {
         from: "institutes",

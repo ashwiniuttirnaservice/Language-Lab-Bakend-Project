@@ -52,7 +52,7 @@ const getAll = asyncHandler(async (req, res) => {
   const licenses = await License.find()
     .populate("institute_id", "name")
     .populate("purchased_by", "full_name email")
-    .sort({ createdAt: -1 });
+    .sort({ createdAt: 1 });
 
   return sendResponse(
     res,

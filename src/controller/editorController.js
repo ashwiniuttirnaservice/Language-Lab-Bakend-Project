@@ -53,7 +53,7 @@ const create = asyncHandler(async (req, res) => {
 const getAll = asyncHandler(async (req, res) => {
   const editors = await Editor.aggregate([
     { $match: { is_active: true } },
-    { $sort: { createdAt: -1 } },
+    { $sort: { createdAt: 1 } },
     {
       $lookup: {
         from: "superadmins",
