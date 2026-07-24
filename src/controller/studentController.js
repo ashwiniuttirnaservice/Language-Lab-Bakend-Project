@@ -10,33 +10,6 @@ const asyncHandler = require("../middlewares/asyncHandler");
 const { sendResponse, sendError } = require("../utils/apiResponse");
 const uploadToAws = require("../utils/awsUpload");
 const { bulkRowSchema } = require("../validation/studentValidation");
-const logger = require("../utils/logger");
-const { getInstituteDb, upsertAll } = require("../utils/instituteDb");
-
-// Best-effort mirror of one student into the institute's local database.
-// Must never throw into the caller — a failed mirror shouldn't fail the write.
-async function mirrorStudentLocally(student) {
-  try {
-    const instituteDb = getInstituteDb();
-    await upsertAll(instituteDb.model("Student"), [
-      student.toObject ? student.toObject() : student,
-    ]);
-  } catch (error) {
-    logger.error(`Per-institute DB mirror failed for student ${student._id}: ${error.message}`);
-  }
-}
-
-// Best-effort mirror of several students (by id) into the institute's local
-// database — used after a bulk update (e.g. course assignment) in Master DB.
-async function mirrorStudentsLocallyById(studentIds) {
-  try {
-    const students = await Student.find({ _id: { $in: studentIds } }).lean();
-    const instituteDb = getInstituteDb();
-    await upsertAll(instituteDb.model("Student"), students);
-  } catch (error) {
-    logger.error(`Per-institute DB mirror failed for students [${studentIds.join(", ")}]: ${error.message}`);
-  }
-}
 
 const signToken = (id, session_id) =>
   jwt.sign({ id, role: "student", session_id }, process.env.JWT_SECRET, {
@@ -94,8 +67,6 @@ const create = asyncHandler(async (req, res) => {
     year,
     institute_id,
   });
-
-  await mirrorStudentLocally(student);
 
   return sendResponse(res, 201, true, "Student created successfully.", {
     id: student._id,
@@ -165,16 +136,12 @@ const getAllForAdmin = asyncHandler(async (req, res) => {
 });
 
 // ── Institute: list students (optional ?segment= ?year= filters) ──────────────
-// Reads from the institute's own local database.
 const getAll = asyncHandler(async (req, res) => {
   const matchStage = { institute_id: new Types.ObjectId(req.institute._id) };
   if (req.query.segment) matchStage.segment = req.query.segment;
   if (req.query.year) matchStage.year = Number(req.query.year);
 
-  const instituteDb = getInstituteDb();
-  const StudentLocalModel = instituteDb.model("Student");
-
-  const students = await StudentLocalModel.aggregate([
+  const students = await Student.aggregate([
     { $match: matchStage },
     { $sort: { createdAt: 1 } },
     {
@@ -225,13 +192,8 @@ const getAll = asyncHandler(async (req, res) => {
 });
 
 // ── College / Admin: get one student ─────────────────────────────────────────
-// Reads from the institute's own local database. (License isn't mirrored
-// locally, so that lookup will come back empty here.)
 const getOne = asyncHandler(async (req, res) => {
-  const instituteDb = getInstituteDb();
-  const StudentLocalModel = instituteDb.model("Student");
-
-  const [student] = await StudentLocalModel.aggregate([
+  const [student] = await Student.aggregate([
     { $match: { _id: new Types.ObjectId(req.params.id) } },
     {
       $lookup: {
@@ -297,7 +259,6 @@ const update = asyncHandler(async (req, res) => {
   }
 
   await student.save();
-  await mirrorStudentLocally(student);
 
   return sendResponse(res, 200, true, "Student updated successfully.", student);
 });
@@ -310,7 +271,6 @@ const remove = asyncHandler(async (req, res) => {
   student.is_active = false;
   student.status = "inactive";
   await student.save();
-  await mirrorStudentLocally(student);
 
   return sendResponse(res, 200, true, "Student deactivated successfully.");
 });
@@ -323,7 +283,6 @@ const toggleStatus = asyncHandler(async (req, res) => {
   student.is_active = !student.is_active;
   student.status = student.is_active ? "active" : "inactive";
   await student.save();
-  await mirrorStudentLocally(student);
 
   return sendResponse(
     res,
@@ -643,7 +602,6 @@ const bulkUpload = asyncHandler(async (req, res) => {
   if (!rows.length) return sendError(res, 400, false, "Excel file is empty.");
 
   const created = [];
-  const createdDocs = [];
   const failed = [];
   const seenEmails = new Set();
   const seenEnrollments = new Set();
@@ -735,7 +693,6 @@ const bulkUpload = asyncHandler(async (req, res) => {
         institute_id,
       });
       await student.save();
-      createdDocs.push(student.toObject());
 
       created.push({
         row: rowNum,
@@ -748,15 +705,6 @@ const bulkUpload = asyncHandler(async (req, res) => {
         enrollment_no: validated.enrollment_no,
         reason: err.message,
       });
-    }
-  }
-
-  if (createdDocs.length > 0) {
-    try {
-      const instituteDb = getInstituteDb();
-      await upsertAll(instituteDb.model("Student"), createdDocs);
-    } catch (error) {
-      logger.error(`Per-institute DB mirror failed for bulk upload: ${error.message}`);
     }
   }
 
@@ -848,7 +796,6 @@ const bulkAssignCourses = asyncHandler(async (req, res) => {
       { _id: { $in: student_ids } },
       { $pull: { purchased_courses: { $in: courseObjectIds } } },
     );
-    await mirrorStudentsLocallyById(student_ids);
 
     return sendResponse(
       res,
@@ -864,7 +811,6 @@ const bulkAssignCourses = asyncHandler(async (req, res) => {
     { _id: { $in: student_ids } },
     { $addToSet: { purchased_courses: { $each: courseObjectIds } } },
   );
-  await mirrorStudentsLocallyById(student_ids);
 
   return sendResponse(
     res,

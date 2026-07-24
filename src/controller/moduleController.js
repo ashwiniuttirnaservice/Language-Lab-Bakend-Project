@@ -7,7 +7,6 @@ const VocabularyModule = require("../models/VocabularyModule");
 const asyncHandler = require("../middlewares/asyncHandler");
 const { sendResponse, sendError } = require("../utils/apiResponse");
 const uploadToAws = require("../utils/awsUpload");
-const { getInstituteDb } = require("../utils/instituteDb");
 
 const MODEL_MAP = {
   video: VideoModule,
@@ -16,25 +15,6 @@ const MODEL_MAP = {
   exercise: ExerciseModule,
   vocabulary: VocabularyModule,
 };
-
-const MODEL_NAME_MAP = {
-  video: "VideoModule",
-  audio: "AudioModule",
-  text: "TextModule",
-  exercise: "ExerciseModule",
-  vocabulary: "VocabularyModule",
-};
-
-// Students see content from the institute's local database when it's been
-// downloaded there; otherwise this falls back to the master collection.
-function resolveModuleModel(type, forStudent) {
-  if (!forStudent) return MODEL_MAP[type];
-  try {
-    return getInstituteDb().model(MODEL_NAME_MAP[type]);
-  } catch {
-    return MODEL_MAP[type];
-  }
-}
 
 const FOLDER_MAP = {
   video: "modules/videos",
@@ -132,19 +112,10 @@ const getBySubTopic = asyncHandler(async (req, res) => {
     filter.content_module_id = null;
   }
 
-  const LocalOrMasterModel = resolveModuleModel(type, !!req.student);
-  let modules = await LocalOrMasterModel.find(filter)
+  const modules = await Model.find(filter)
     .populate("topic_id", "title")
     .populate("sub_topic_id", "title")
     .sort({ order: 1 });
-
-  // Not downloaded locally yet — fall back to the master collection.
-  if (req.student && modules.length === 0) {
-    modules = await Model.find(filter)
-      .populate("topic_id", "title")
-      .populate("sub_topic_id", "title")
-      .sort({ order: 1 });
-  }
 
   const data =
     type === "exercise" && req.student ? modules.map(stripAnswers) : modules;
@@ -164,18 +135,9 @@ const getOne = asyncHandler(async (req, res) => {
   const Model = MODEL_MAP[type];
   if (!Model) return sendError(res, 400, false, `Invalid module type: ${type}`);
 
-  const LocalOrMasterModel = resolveModuleModel(type, !!req.student);
-  let module = await LocalOrMasterModel.findById(id)
+  const module = await Model.findById(id)
     .populate("topic_id", "title")
     .populate("sub_topic_id", "title");
-
-  // Not downloaded locally yet — fall back to the master collection.
-  if (req.student && !module) {
-    module = await Model.findById(id)
-      .populate("topic_id", "title")
-      .populate("sub_topic_id", "title");
-  }
-
   if (!module || !module.is_active)
     return sendError(res, 404, false, "Module not found.");
 

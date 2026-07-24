@@ -7,11 +7,6 @@ const Course = require("../models/Course");
 const License = require("../models/License");
 const Student = require("../models/Student");
 const StudentProgress = require("../models/StudentProgress");
-const StudentModuleAttempt = require("../models/StudentModuleAttempt");
-const ChatHistory = require("../models/ChatHistory");
-const ActivityLog = require("../models/ActivityLog");
-const Attendance = require("../models/Attendance");
-const Session = require("../models/Session");
 const Topic = require("../models/Topic");
 const SubTopic = require("../models/SubTopic");
 const VocabularyModule = require("../models/VocabularyModule");
@@ -23,8 +18,6 @@ const asyncHandler = require("../middlewares/asyncHandler");
 const { sendResponse, sendError } = require("../utils/apiResponse");
 const uploadToAws = require("../utils/awsUpload");
 const emailService = require("../service/emailService");
-const logger = require("../utils/logger");
-const { getInstituteDb, upsertAll } = require("../utils/instituteDb");
 
 // POST /institute
 const create = asyncHandler(async (req, res) => {
@@ -432,43 +425,6 @@ const login = asyncHandler(async (req, res) => {
     { expiresIn: process.env.JWT_EXPIRES_IN },
   );
 
-  // Mirror this institute's own record, all its students, and the metadata
-  // (not full content) of every licensed course into the local database.
-  // Best-effort — must never block login if it fails.
-  try {
-    const instituteDb = getInstituteDb();
-    await upsertAll(instituteDb.model("Institute"), [institute.toObject()]);
-
-    const students = await Student.find({ institute_id: institute._id }).lean();
-    await upsertAll(instituteDb.model("Student"), students);
-
-    const licensedCourses = await Course.find({
-      _id: { $in: institute.course_id },
-      is_active: true,
-    }).lean();
-    await upsertAll(instituteDb.model("Course"), licensedCourses);
-
-    // Student activity/history data — same institute_id scope as Student.
-    const instituteScope = { institute_id: institute._id };
-    const [progress, attempts, chats, activity, attendance, sessions] = await Promise.all([
-      StudentProgress.find(instituteScope).lean(),
-      StudentModuleAttempt.find(instituteScope).lean(),
-      ChatHistory.find(instituteScope).lean(),
-      ActivityLog.find(instituteScope).lean(),
-      Attendance.find(instituteScope).lean(),
-      Session.find(instituteScope).lean(),
-    ]);
-
-    await upsertAll(instituteDb.model("StudentProgress"), progress);
-    await upsertAll(instituteDb.model("StudentModuleAttempt"), attempts);
-    await upsertAll(instituteDb.model("ChatHistory"), chats);
-    await upsertAll(instituteDb.model("ActivityLog"), activity);
-    await upsertAll(instituteDb.model("Attendance"), attendance);
-    await upsertAll(instituteDb.model("Session"), sessions);
-  } catch (error) {
-    logger.error(`Per-institute DB mirror failed on login (${institute.institute_code}): ${error.message}`);
-  }
-
   return sendResponse(res, 200, true, "Login successful.", {
     token,
     institute: {
@@ -485,12 +441,43 @@ const login = asyncHandler(async (req, res) => {
 // GET /institute/me
 // Reads from the institute's own local database, not the master.
 const getMe = asyncHandler(async (req, res) => {
-  const instituteDb = getInstituteDb();
-  const InstituteLocalModel = instituteDb.model("Institute");
+  const { Types } = require("mongoose");
 
-  const institute = await InstituteLocalModel.findById(req.institute._id)
-    .select("-password")
-    .lean();
+  const [institute] = await Institute.aggregate([
+    { $match: { _id: new Types.ObjectId(req.institute._id) } },
+    {
+      $lookup: {
+        from: "licenses",
+        localField: "license_id",
+        foreignField: "_id",
+        as: "license",
+        pipeline: [
+          {
+            $project: {
+              license_key: 1,
+              license_code: 1,
+              status: 1,
+              start_date: 1,
+              expiry_date: 1,
+              total_seats: 1,
+              active_sessions: 1,
+            },
+          },
+        ],
+      },
+    },
+    { $unwind: { path: "$license", preserveNullAndEmptyArrays: true } },
+    {
+      $lookup: {
+        from: "editors",
+        localField: "editors",
+        foreignField: "_id",
+        as: "editors",
+        pipeline: [{ $project: { full_name: 1, email: 1, profilePhoto: 1 } }],
+      },
+    },
+    { $project: { password: 0 } },
+  ]);
 
   return sendResponse(res, 200, true, "Profile fetched successfully.", institute);
 });
@@ -525,24 +512,39 @@ const updateMe = asyncHandler(async (req, res) => {
 // Reads from the institute's own local database (course metadata for every
 // licensed course is mirrored at login; full content only once downloaded).
 const getPurchasedCourses = asyncHandler(async (req, res) => {
-  const instituteDb = getInstituteDb();
-  const InstituteLocalModel = instituteDb.model("Institute");
-  const CourseLocalModel = instituteDb.model("Course");
+  const { Types } = require("mongoose");
 
-  const institute = await InstituteLocalModel.findById(req.institute._id)
-    .select("course_id downloaded_course_ids")
-    .lean();
+  const [institute] = await Institute.aggregate([
+    { $match: { _id: new Types.ObjectId(req.institute._id) } },
+    {
+      $lookup: {
+        from: "courses",
+        localField: "course_id",
+        foreignField: "_id",
+        as: "courses",
+        pipeline: [
+          { $match: { is_active: true } },
+          {
+            $project: {
+              course_name: 1,
+              course_code: 1,
+              description: 1,
+              level: 1,
+              language: 1,
+              duration_days: 1,
+              thumbnail_url: 1,
+            },
+          },
+        ],
+      },
+    },
+    { $project: { courses: 1, downloaded_course_ids: 1, _id: 0 } },
+  ]);
 
   const downloadedSet = new Set(
     (institute?.downloaded_course_ids ?? []).map((id) => id.toString()),
   );
-
-  const courseDocs = await CourseLocalModel.find(
-    { _id: { $in: institute?.course_id ?? [] }, is_active: true },
-    "course_name course_code description level language duration_days thumbnail_url",
-  ).lean();
-
-  const courses = courseDocs.map((course) => ({
+  const courses = (institute?.courses ?? []).map((course) => ({
     ...course,
     is_downloaded: downloadedSet.has(course._id.toString()),
   }));
@@ -554,20 +556,11 @@ const getPurchasedCourses = asyncHandler(async (req, res) => {
 });
 
 // GET /institute/me/dashboard
-// Reads students/courses from the institute's own local database. License
-// data isn't mirrored locally (billing concern), so that part still reads
-// from the master.
 const getDashboard = asyncHandler(async (req, res) => {
   const { Types } = require("mongoose");
   const instituteId = new Types.ObjectId(req.institute._id);
 
-  const instituteDb = getInstituteDb();
-  const InstituteLocalModel = instituteDb.model("Institute");
-  const StudentLocalModel = instituteDb.model("Student");
-  const StudentProgressLocalModel = instituteDb.model("StudentProgress");
-  const CourseLocalModel = instituteDb.model("Course");
-
-  const institute = await InstituteLocalModel.findById(instituteId).select(
+  const institute = await Institute.findById(instituteId).select(
     "institute_name course_id downloaded_course_ids license_ids license_count max_students createdAt",
   );
   if (!institute) return sendError(res, 404, false, "Institute not found.");
@@ -584,20 +577,20 @@ const getDashboard = asyncHandler(async (req, res) => {
     recentStudents,
     recentCompletions,
   ] = await Promise.all([
-    StudentLocalModel.countDocuments({ institute_id: instituteId }),
-    StudentLocalModel.countDocuments({ institute_id: instituteId, createdAt: { $gte: weekAgo } }),
-    StudentLocalModel.aggregate([
+    Student.countDocuments({ institute_id: instituteId }),
+    Student.countDocuments({ institute_id: instituteId, createdAt: { $gte: weekAgo } }),
+    Student.aggregate([
       { $match: { institute_id: instituteId } },
       { $group: { _id: "$status", count: { $sum: 1 } } },
     ]),
-    CourseLocalModel.countDocuments({
+    Course.countDocuments({
       _id: { $in: institute.downloaded_course_ids },
       is_active: true,
     }),
     License.find({ _id: { $in: institute.license_ids } }).select(
       "status total_seats active_sessions",
     ),
-    StudentProgressLocalModel.aggregate([
+    StudentProgress.aggregate([
       { $match: { institute_id: instituteId } },
       {
         $group: {
@@ -607,12 +600,12 @@ const getDashboard = asyncHandler(async (req, res) => {
         },
       },
     ]),
-    StudentLocalModel.find({ institute_id: instituteId })
+    Student.find({ institute_id: instituteId })
       .sort({ createdAt: -1 })
       .limit(5)
       .select("full_name createdAt")
       .lean(),
-    StudentProgressLocalModel.find({ institute_id: instituteId, is_completed: true })
+    StudentProgress.find({ institute_id: instituteId, is_completed: true })
       .sort({ completed_at: -1 })
       .limit(5)
       .populate("student_id", "full_name")
@@ -646,7 +639,7 @@ const getDashboard = asyncHandler(async (req, res) => {
     const monthStart = new Date(now.getFullYear(), monthIndex, 1);
     const nextMonthStart = new Date(now.getFullYear(), monthIndex + 1, 1);
     // eslint-disable-next-line no-await-in-loop
-    const count = await StudentLocalModel.countDocuments({
+    const count = await Student.countDocuments({
       institute_id: instituteId,
       createdAt: { $lt: nextMonthStart },
     });
@@ -831,22 +824,6 @@ const downloadCourseData = asyncHandler(async (req, res) => {
     { _id: req.institute._id },
     { $addToSet: { downloaded_course_ids: course._id } },
   );
-
-  // Mirror the pulled content into this institute's own database.
-  // Best-effort — must never fail the download response.
-  try {
-    const instituteDb = getInstituteDb();
-    await upsertAll(instituteDb.model("Course"), [course]);
-    await upsertAll(instituteDb.model("Topic"), topics);
-    await upsertAll(instituteDb.model("SubTopic"), subTopics);
-    await upsertAll(instituteDb.model("VocabularyModule"), vocabulary);
-    await upsertAll(instituteDb.model("AudioModule"), audio);
-    await upsertAll(instituteDb.model("VideoModule"), video);
-    await upsertAll(instituteDb.model("TextModule"), text);
-    await upsertAll(instituteDb.model("ExerciseModule"), exercise);
-  } catch (error) {
-    logger.error(`Per-institute DB mirror failed on download (${req.institute.institute_code}, course ${courseId}): ${error.message}`);
-  }
 
   return sendResponse(res, 200, true, "Course data pulled successfully.", {
     course,
