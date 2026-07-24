@@ -10,6 +10,33 @@ const asyncHandler = require("../middlewares/asyncHandler");
 const { sendResponse, sendError } = require("../utils/apiResponse");
 const uploadToAws = require("../utils/awsUpload");
 const { bulkRowSchema } = require("../validation/studentValidation");
+const logger = require("../utils/logger");
+const { getInstituteDb, upsertAll } = require("../utils/instituteDb");
+
+// Best-effort mirror of one student into the institute's local database.
+// Must never throw into the caller — a failed mirror shouldn't fail the write.
+async function mirrorStudentLocally(student) {
+  try {
+    const instituteDb = getInstituteDb();
+    await upsertAll(instituteDb.model("Student"), [
+      student.toObject ? student.toObject() : student,
+    ]);
+  } catch (error) {
+    logger.error(`Per-institute DB mirror failed for student ${student._id}: ${error.message}`);
+  }
+}
+
+// Best-effort mirror of several students (by id) into the institute's local
+// database — used after a bulk update (e.g. course assignment) in Master DB.
+async function mirrorStudentsLocallyById(studentIds) {
+  try {
+    const students = await Student.find({ _id: { $in: studentIds } }).lean();
+    const instituteDb = getInstituteDb();
+    await upsertAll(instituteDb.model("Student"), students);
+  } catch (error) {
+    logger.error(`Per-institute DB mirror failed for students [${studentIds.join(", ")}]: ${error.message}`);
+  }
+}
 
 const signToken = (id, session_id) =>
   jwt.sign({ id, role: "student", session_id }, process.env.JWT_SECRET, {
@@ -67,6 +94,8 @@ const create = asyncHandler(async (req, res) => {
     year,
     institute_id,
   });
+
+  await mirrorStudentLocally(student);
 
   return sendResponse(res, 201, true, "Student created successfully.", {
     id: student._id,
@@ -136,12 +165,16 @@ const getAllForAdmin = asyncHandler(async (req, res) => {
 });
 
 // ── Institute: list students (optional ?segment= ?year= filters) ──────────────
+// Reads from the institute's own local database.
 const getAll = asyncHandler(async (req, res) => {
   const matchStage = { institute_id: new Types.ObjectId(req.institute._id) };
   if (req.query.segment) matchStage.segment = req.query.segment;
   if (req.query.year) matchStage.year = Number(req.query.year);
 
-  const students = await Student.aggregate([
+  const instituteDb = getInstituteDb();
+  const StudentLocalModel = instituteDb.model("Student");
+
+  const students = await StudentLocalModel.aggregate([
     { $match: matchStage },
     { $sort: { createdAt: 1 } },
     {
@@ -160,7 +193,7 @@ const getAll = asyncHandler(async (req, res) => {
         localField: "purchased_courses",
         foreignField: "_id",
         as: "purchased_courses_detail",
-        pipeline: [{ $project: { course_name: 1 } }],
+        pipeline: [{ $project: { course_name: 1, course_code: 1 } }],
       },
     },
     {
@@ -180,7 +213,7 @@ const getAll = asyncHandler(async (req, res) => {
         last_login: 1,
         createdAt: 1,
         institute: 1,
-        purchased_courses: "$purchased_courses_detail.course_name",
+        purchased_courses: "$purchased_courses_detail",
       },
     },
   ]);
@@ -192,8 +225,13 @@ const getAll = asyncHandler(async (req, res) => {
 });
 
 // ── College / Admin: get one student ─────────────────────────────────────────
+// Reads from the institute's own local database. (License isn't mirrored
+// locally, so that lookup will come back empty here.)
 const getOne = asyncHandler(async (req, res) => {
-  const [student] = await Student.aggregate([
+  const instituteDb = getInstituteDb();
+  const StudentLocalModel = instituteDb.model("Student");
+
+  const [student] = await StudentLocalModel.aggregate([
     { $match: { _id: new Types.ObjectId(req.params.id) } },
     {
       $lookup: {
@@ -259,6 +297,7 @@ const update = asyncHandler(async (req, res) => {
   }
 
   await student.save();
+  await mirrorStudentLocally(student);
 
   return sendResponse(res, 200, true, "Student updated successfully.", student);
 });
@@ -271,6 +310,7 @@ const remove = asyncHandler(async (req, res) => {
   student.is_active = false;
   student.status = "inactive";
   await student.save();
+  await mirrorStudentLocally(student);
 
   return sendResponse(res, 200, true, "Student deactivated successfully.");
 });
@@ -283,6 +323,7 @@ const toggleStatus = asyncHandler(async (req, res) => {
   student.is_active = !student.is_active;
   student.status = student.is_active ? "active" : "inactive";
   await student.save();
+  await mirrorStudentLocally(student);
 
   return sendResponse(
     res,
@@ -602,6 +643,7 @@ const bulkUpload = asyncHandler(async (req, res) => {
   if (!rows.length) return sendError(res, 400, false, "Excel file is empty.");
 
   const created = [];
+  const createdDocs = [];
   const failed = [];
   const seenEmails = new Set();
   const seenEnrollments = new Set();
@@ -693,6 +735,7 @@ const bulkUpload = asyncHandler(async (req, res) => {
         institute_id,
       });
       await student.save();
+      createdDocs.push(student.toObject());
 
       created.push({
         row: rowNum,
@@ -705,6 +748,15 @@ const bulkUpload = asyncHandler(async (req, res) => {
         enrollment_no: validated.enrollment_no,
         reason: err.message,
       });
+    }
+  }
+
+  if (createdDocs.length > 0) {
+    try {
+      const instituteDb = getInstituteDb();
+      await upsertAll(instituteDb.model("Student"), createdDocs);
+    } catch (error) {
+      logger.error(`Per-institute DB mirror failed for bulk upload: ${error.message}`);
     }
   }
 
@@ -739,23 +791,25 @@ const bulkUpload = asyncHandler(async (req, res) => {
 
 // ── Institute: bulk assign courses to students ────────────────────────────────
 const bulkAssignCourses = asyncHandler(async (req, res) => {
-  const { student_ids, course_ids } = req.body;
+  const { student_ids, course_ids, action = "assign" } = req.body;
   const instituteId = req.institute._id.toString();
 
-  // All course_ids must be in institute's purchased courses
-  const instituteCourseIds = (req.institute.course_id || []).map((id) =>
-    id.toString(),
-  );
-  const invalidCourses = course_ids.filter(
-    (id) => !instituteCourseIds.includes(id),
-  );
-  if (invalidCourses.length) {
-    return sendError(
-      res,
-      400,
-      false,
-      `course_ids ${invalidCourses.join(", ")} not in institute purchased courses`,
+  // Unassigning doesn't need the "downloaded" gate — only new assignments do.
+  if (action === "assign") {
+    const downloadedCourseIds = (req.institute.downloaded_course_ids || []).map(
+      (id) => id.toString(),
     );
+    const invalidCourses = course_ids.filter(
+      (id) => !downloadedCourseIds.includes(id),
+    );
+    if (invalidCourses.length) {
+      return sendError(
+        res,
+        400,
+        false,
+        `course_ids ${invalidCourses.join(", ")} have not been downloaded by the institute yet`,
+      );
+    }
   }
 
   // All student_ids must belong to this institute
@@ -787,12 +841,30 @@ const bulkAssignCourses = asyncHandler(async (req, res) => {
     );
   }
 
-  // Append without duplicates
   const courseObjectIds = course_ids.map((id) => new Types.ObjectId(id));
+
+  if (action === "unassign") {
+    await Student.updateMany(
+      { _id: { $in: student_ids } },
+      { $pull: { purchased_courses: { $in: courseObjectIds } } },
+    );
+    await mirrorStudentsLocallyById(student_ids);
+
+    return sendResponse(
+      res,
+      200,
+      true,
+      `Courses unassigned from ${student_ids.length} students`,
+      { unassigned_count: student_ids.length },
+    );
+  }
+
+  // Append without duplicates
   await Student.updateMany(
     { _id: { $in: student_ids } },
     { $addToSet: { purchased_courses: { $each: courseObjectIds } } },
   );
+  await mirrorStudentsLocallyById(student_ids);
 
   return sendResponse(
     res,
@@ -882,11 +954,11 @@ const purchaseCourse = asyncHandler(async (req, res) => {
   const student = await Student.findById(req.student._id);
 
   const institute = await Institute.findById(student.institute_id).select(
-    "course_id",
+    "downloaded_course_ids",
   );
   if (!institute) return sendError(res, 404, false, "Institute not found.");
 
-  const offeredByInstitute = institute.course_id.some(
+  const offeredByInstitute = institute.downloaded_course_ids.some(
     (id) => id.toString() === course_id,
   );
   if (!offeredByInstitute)
@@ -894,7 +966,7 @@ const purchaseCourse = asyncHandler(async (req, res) => {
       res,
       403,
       false,
-      "This course is not available at your institute.",
+      "This course has not been downloaded by your institute yet.",
     );
 
   const alreadyEnrolled = (student.purchased_courses || []).some(

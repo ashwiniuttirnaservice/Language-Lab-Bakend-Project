@@ -155,8 +155,51 @@ async function sendLicensePurchaseEmail({ institute, courses = [], licenses = []
   });
 }
 
+// Sent when a super admin changes the set of courses assigned to an institute.
+async function sendInstituteCourseAssignedEmail(institute, courses = []) {
+  const courseListHtml = courses.length
+    ? `<ul style="padding-left:18px; margin:10px 0;">${courses
+        .map((c) => `<li>${c.course_name}</li>`)
+        .join("")}</ul>`
+    : "<p>No courses are currently assigned to your institute.</p>";
+
+  const body = `
+    <p>Dear <strong>${institute.institute_name}</strong>,</p>
+    <p>The courses assigned to your institute on <strong>Language Lab</strong> have been updated. Your institute now has access to the following course(s):</p>
+    ${courseListHtml}
+  `;
+
+  return sendMail({
+    to: institute.email,
+    toName: institute.institute_name,
+    subject: "Language Lab — Course Assignment Updated",
+    html: wrapTemplate({ title: "Course Assignment Updated", bodyHtml: body }),
+  });
+}
+
+// Sent when an institute requests an OTP on the institute-code login flow (/config).
+async function sendInstituteOtpEmail(institute, otp) {
+  const body = `
+    <p>Dear <strong>${institute.institute_name}</strong>,</p>
+    <p>Use the code below to continue signing in to <strong>Language Lab</strong>:</p>
+    <div style="background:#f1f5f9; border-radius:8px; padding:16px; margin:20px 0; text-align:center;">
+      <span style="font-size:28px; font-weight:700; letter-spacing:6px; color:#4338ca;">${otp}</span>
+    </div>
+    <p>This code expires in 10 minutes. If you did not request this, you can ignore this email.</p>
+  `;
+
+  return sendMail({
+    to: institute.email,
+    toName: institute.institute_name,
+    subject: `${otp} is your Language Lab verification code`,
+    html: wrapTemplate({ title: "Verification Code", bodyHtml: body }),
+  });
+}
+
 module.exports = {
   sendMail,
   sendInstituteCredentialsEmail,
   sendLicensePurchaseEmail,
+  sendInstituteCourseAssignedEmail,
+  sendInstituteOtpEmail,
 };

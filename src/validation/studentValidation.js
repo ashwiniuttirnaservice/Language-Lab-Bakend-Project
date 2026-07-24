@@ -50,6 +50,7 @@ const purchaseCourseSchema = Joi.object({
 const bulkAssignCoursesSchema = Joi.object({
   student_ids: Joi.array().items(objectId).min(1).required(),
   course_ids: Joi.array().items(objectId).min(1).required(),
+  action: Joi.string().valid("assign", "unassign").default("assign"),
 });
 
 module.exports = {

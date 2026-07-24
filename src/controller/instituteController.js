@@ -7,10 +7,24 @@ const Course = require("../models/Course");
 const License = require("../models/License");
 const Student = require("../models/Student");
 const StudentProgress = require("../models/StudentProgress");
+const StudentModuleAttempt = require("../models/StudentModuleAttempt");
+const ChatHistory = require("../models/ChatHistory");
+const ActivityLog = require("../models/ActivityLog");
+const Attendance = require("../models/Attendance");
+const Session = require("../models/Session");
+const Topic = require("../models/Topic");
+const SubTopic = require("../models/SubTopic");
+const VocabularyModule = require("../models/VocabularyModule");
+const AudioModule = require("../models/AudioModule");
+const VideoModule = require("../models/VideoModule");
+const TextModule = require("../models/TextModule");
+const ExerciseModule = require("../models/ExerciseModule");
 const asyncHandler = require("../middlewares/asyncHandler");
 const { sendResponse, sendError } = require("../utils/apiResponse");
 const uploadToAws = require("../utils/awsUpload");
 const emailService = require("../service/emailService");
+const logger = require("../utils/logger");
+const { getInstituteDb, upsertAll } = require("../utils/instituteDb");
 
 // POST /institute
 const create = asyncHandler(async (req, res) => {
@@ -235,6 +249,8 @@ const update = asyncHandler(async (req, res) => {
     course_id,
   } = req.body;
 
+  const previousCourseIds = institute.course_id.map((id) => id.toString()).sort();
+
   if (course_id !== undefined) {
     const courseIds = Array.isArray(course_id) ? course_id : [course_id];
     if (courseIds.length === 0) {
@@ -300,6 +316,19 @@ const update = asyncHandler(async (req, res) => {
   }
 
   await institute.save();
+
+  const newCourseIds = institute.course_id.map((id) => id.toString()).sort();
+  const coursesChanged =
+    course_id !== undefined &&
+    (newCourseIds.length !== previousCourseIds.length ||
+      newCourseIds.some((id, i) => id !== previousCourseIds[i]));
+
+  if (coursesChanged) {
+    const assignedCourses = await Course.find({ _id: { $in: institute.course_id } }).select(
+      "course_name",
+    );
+    await emailService.sendInstituteCourseAssignedEmail(institute, assignedCourses);
+  }
 
   return sendResponse(res, 200, true, "Institute updated successfully.", institute);
 });
@@ -403,6 +432,43 @@ const login = asyncHandler(async (req, res) => {
     { expiresIn: process.env.JWT_EXPIRES_IN },
   );
 
+  // Mirror this institute's own record, all its students, and the metadata
+  // (not full content) of every licensed course into the local database.
+  // Best-effort — must never block login if it fails.
+  try {
+    const instituteDb = getInstituteDb();
+    await upsertAll(instituteDb.model("Institute"), [institute.toObject()]);
+
+    const students = await Student.find({ institute_id: institute._id }).lean();
+    await upsertAll(instituteDb.model("Student"), students);
+
+    const licensedCourses = await Course.find({
+      _id: { $in: institute.course_id },
+      is_active: true,
+    }).lean();
+    await upsertAll(instituteDb.model("Course"), licensedCourses);
+
+    // Student activity/history data — same institute_id scope as Student.
+    const instituteScope = { institute_id: institute._id };
+    const [progress, attempts, chats, activity, attendance, sessions] = await Promise.all([
+      StudentProgress.find(instituteScope).lean(),
+      StudentModuleAttempt.find(instituteScope).lean(),
+      ChatHistory.find(instituteScope).lean(),
+      ActivityLog.find(instituteScope).lean(),
+      Attendance.find(instituteScope).lean(),
+      Session.find(instituteScope).lean(),
+    ]);
+
+    await upsertAll(instituteDb.model("StudentProgress"), progress);
+    await upsertAll(instituteDb.model("StudentModuleAttempt"), attempts);
+    await upsertAll(instituteDb.model("ChatHistory"), chats);
+    await upsertAll(instituteDb.model("ActivityLog"), activity);
+    await upsertAll(instituteDb.model("Attendance"), attendance);
+    await upsertAll(instituteDb.model("Session"), sessions);
+  } catch (error) {
+    logger.error(`Per-institute DB mirror failed on login (${institute.institute_code}): ${error.message}`);
+  }
+
   return sendResponse(res, 200, true, "Login successful.", {
     token,
     institute: {
@@ -417,44 +483,14 @@ const login = asyncHandler(async (req, res) => {
 });
 
 // GET /institute/me
+// Reads from the institute's own local database, not the master.
 const getMe = asyncHandler(async (req, res) => {
-  const { Types } = require("mongoose");
+  const instituteDb = getInstituteDb();
+  const InstituteLocalModel = instituteDb.model("Institute");
 
-  const [institute] = await Institute.aggregate([
-    { $match: { _id: new Types.ObjectId(req.institute._id) } },
-    {
-      $lookup: {
-        from: "licenses",
-        localField: "license_id",
-        foreignField: "_id",
-        as: "license",
-        pipeline: [
-          {
-            $project: {
-              license_key: 1,
-              license_code: 1,
-              status: 1,
-              start_date: 1,
-              expiry_date: 1,
-              total_seats: 1,
-              active_sessions: 1,
-            },
-          },
-        ],
-      },
-    },
-    { $unwind: { path: "$license", preserveNullAndEmptyArrays: true } },
-    {
-      $lookup: {
-        from: "editors",
-        localField: "editors",
-        foreignField: "_id",
-        as: "editors",
-        pipeline: [{ $project: { full_name: 1, email: 1, profilePhoto: 1 } }],
-      },
-    },
-    { $project: { password: 0 } },
-  ]);
+  const institute = await InstituteLocalModel.findById(req.institute._id)
+    .select("-password")
+    .lean();
 
   return sendResponse(res, 200, true, "Profile fetched successfully.", institute);
 });
@@ -486,37 +522,30 @@ const updateMe = asyncHandler(async (req, res) => {
 });
 
 // GET /institute/me/courses
+// Reads from the institute's own local database (course metadata for every
+// licensed course is mirrored at login; full content only once downloaded).
 const getPurchasedCourses = asyncHandler(async (req, res) => {
-  const { Types } = require("mongoose");
+  const instituteDb = getInstituteDb();
+  const InstituteLocalModel = instituteDb.model("Institute");
+  const CourseLocalModel = instituteDb.model("Course");
 
-  const [institute] = await Institute.aggregate([
-    { $match: { _id: new Types.ObjectId(req.institute._id) } },
-    {
-      $lookup: {
-        from: "courses",
-        localField: "course_id",
-        foreignField: "_id",
-        as: "courses",
-        pipeline: [
-          { $match: { is_active: true } },
-          {
-            $project: {
-              course_name: 1,
-              course_code: 1,
-              description: 1,
-              level: 1,
-              language: 1,
-              duration_days: 1,
-              thumbnail_url: 1,
-            },
-          },
-        ],
-      },
-    },
-    { $project: { courses: 1, _id: 0 } },
-  ]);
+  const institute = await InstituteLocalModel.findById(req.institute._id)
+    .select("course_id downloaded_course_ids")
+    .lean();
 
-  const courses = institute?.courses ?? [];
+  const downloadedSet = new Set(
+    (institute?.downloaded_course_ids ?? []).map((id) => id.toString()),
+  );
+
+  const courseDocs = await CourseLocalModel.find(
+    { _id: { $in: institute?.course_id ?? [] }, is_active: true },
+    "course_name course_code description level language duration_days thumbnail_url",
+  ).lean();
+
+  const courses = courseDocs.map((course) => ({
+    ...course,
+    is_downloaded: downloadedSet.has(course._id.toString()),
+  }));
 
   return sendResponse(res, 200, true, "Purchased courses fetched.", {
     total: courses.length,
@@ -525,12 +554,21 @@ const getPurchasedCourses = asyncHandler(async (req, res) => {
 });
 
 // GET /institute/me/dashboard
+// Reads students/courses from the institute's own local database. License
+// data isn't mirrored locally (billing concern), so that part still reads
+// from the master.
 const getDashboard = asyncHandler(async (req, res) => {
   const { Types } = require("mongoose");
   const instituteId = new Types.ObjectId(req.institute._id);
 
-  const institute = await Institute.findById(instituteId).select(
-    "institute_name course_id license_ids license_count max_students createdAt",
+  const instituteDb = getInstituteDb();
+  const InstituteLocalModel = instituteDb.model("Institute");
+  const StudentLocalModel = instituteDb.model("Student");
+  const StudentProgressLocalModel = instituteDb.model("StudentProgress");
+  const CourseLocalModel = instituteDb.model("Course");
+
+  const institute = await InstituteLocalModel.findById(instituteId).select(
+    "institute_name course_id downloaded_course_ids license_ids license_count max_students createdAt",
   );
   if (!institute) return sendError(res, 404, false, "Institute not found.");
 
@@ -546,17 +584,20 @@ const getDashboard = asyncHandler(async (req, res) => {
     recentStudents,
     recentCompletions,
   ] = await Promise.all([
-    Student.countDocuments({ institute_id: instituteId }),
-    Student.countDocuments({ institute_id: instituteId, createdAt: { $gte: weekAgo } }),
-    Student.aggregate([
+    StudentLocalModel.countDocuments({ institute_id: instituteId }),
+    StudentLocalModel.countDocuments({ institute_id: instituteId, createdAt: { $gte: weekAgo } }),
+    StudentLocalModel.aggregate([
       { $match: { institute_id: instituteId } },
       { $group: { _id: "$status", count: { $sum: 1 } } },
     ]),
-    Course.countDocuments({ _id: { $in: institute.course_id }, is_active: true }),
+    CourseLocalModel.countDocuments({
+      _id: { $in: institute.downloaded_course_ids },
+      is_active: true,
+    }),
     License.find({ _id: { $in: institute.license_ids } }).select(
       "status total_seats active_sessions",
     ),
-    StudentProgress.aggregate([
+    StudentProgressLocalModel.aggregate([
       { $match: { institute_id: instituteId } },
       {
         $group: {
@@ -566,12 +607,12 @@ const getDashboard = asyncHandler(async (req, res) => {
         },
       },
     ]),
-    Student.find({ institute_id: instituteId })
+    StudentLocalModel.find({ institute_id: instituteId })
       .sort({ createdAt: -1 })
       .limit(5)
       .select("full_name createdAt")
       .lean(),
-    StudentProgress.find({ institute_id: instituteId, is_completed: true })
+    StudentProgressLocalModel.find({ institute_id: instituteId, is_completed: true })
       .sort({ completed_at: -1 })
       .limit(5)
       .populate("student_id", "full_name")
@@ -605,7 +646,7 @@ const getDashboard = asyncHandler(async (req, res) => {
     const monthStart = new Date(now.getFullYear(), monthIndex, 1);
     const nextMonthStart = new Date(now.getFullYear(), monthIndex + 1, 1);
     // eslint-disable-next-line no-await-in-loop
-    const count = await Student.countDocuments({
+    const count = await StudentLocalModel.countDocuments({
       institute_id: instituteId,
       createdAt: { $lt: nextMonthStart },
     });
@@ -639,6 +680,7 @@ const getDashboard = asyncHandler(async (req, res) => {
     },
     courses_licensed: {
       total: coursesLicensedCount,
+      licensed_total: institute.course_id.length,
     },
     license_usage: {
       total_seats: totalSeats || institute.license_count,
@@ -701,6 +743,260 @@ const getPublic = asyncHandler(async (req, res) => {
   return sendResponse(res, 200, true, "Institute fetched successfully.", institute);
 });
 
+// GET /institute/me/courses/:courseId/download
+// Pulls the full content (topics -> sub-topics -> modules) for ONE course
+// assigned to this institute — only the course whose Download button was
+// clicked, not the institute's whole assigned list.
+const downloadCourseData = asyncHandler(async (req, res) => {
+  const { courseId } = req.params;
+
+  if (!mongoose.Types.ObjectId.isValid(courseId)) {
+    return sendError(res, 404, false, "Course not found.");
+  }
+
+  const institute = await Institute.findById(req.institute._id).select("course_id");
+  const isAssigned = institute.course_id.some(
+    (id) => id.toString() === courseId,
+  );
+  if (!isAssigned) {
+    return sendError(
+      res,
+      403,
+      false,
+      "This course is not assigned to your institute.",
+    );
+  }
+
+  const course = await Course.findOne({
+    _id: courseId,
+    is_active: true,
+  }).lean();
+  if (!course) return sendError(res, 404, false, "Course not found.");
+
+  const topics = await Topic.find({
+    _id: { $in: course.topic_ids },
+    is_active: true,
+  })
+    .sort({ order: 1 })
+    .lean();
+  const topicIds = topics.map((t) => t._id);
+
+  const subTopics = await SubTopic.find({
+    topic_id: { $in: topicIds },
+    is_active: true,
+  })
+    .sort({ order: 1 })
+    .lean();
+
+  const [vocabulary, audio, video, text, exercise] = await Promise.all([
+    VocabularyModule.find({ topic_id: { $in: topicIds }, is_active: true }).lean(),
+    AudioModule.find({ topic_id: { $in: topicIds }, is_active: true }).lean(),
+    VideoModule.find({ topic_id: { $in: topicIds }, is_active: true }).lean(),
+    TextModule.find({ topic_id: { $in: topicIds }, is_active: true }).lean(),
+    ExerciseModule.find({ topic_id: { $in: topicIds }, is_active: true }).lean(),
+  ]);
+
+  const modules = [...vocabulary, ...audio, ...video, ...text, ...exercise];
+
+  const subTopicsByTopic = new Map();
+  for (const st of subTopics) {
+    const key = st.topic_id.toString();
+    const entry = { ...st, modules: [] };
+    if (!subTopicsByTopic.has(key)) subTopicsByTopic.set(key, []);
+    subTopicsByTopic.get(key).push(entry);
+  }
+
+  for (const m of modules) {
+    const subTopicList = subTopicsByTopic.get(m.topic_id.toString());
+    const st = subTopicList?.find(
+      (s) => s._id.toString() === m.sub_topic_id.toString(),
+    );
+    if (st) st.modules.push(m);
+  }
+
+  const topicsWithContent = topics.map((t) => ({
+    ...t,
+    sub_topics: subTopicsByTopic.get(t._id.toString()) || [],
+  }));
+
+  const lastUpdated = latestTimestamp([
+    course.updatedAt,
+    ...topics.map((t) => t.updatedAt),
+    ...subTopics.map((s) => s.updatedAt),
+    ...modules.map((m) => m.updatedAt),
+  ]);
+
+  // Only downloaded courses can be assigned to students.
+  await Institute.updateOne(
+    { _id: req.institute._id },
+    { $addToSet: { downloaded_course_ids: course._id } },
+  );
+
+  // Mirror the pulled content into this institute's own database.
+  // Best-effort — must never fail the download response.
+  try {
+    const instituteDb = getInstituteDb();
+    await upsertAll(instituteDb.model("Course"), [course]);
+    await upsertAll(instituteDb.model("Topic"), topics);
+    await upsertAll(instituteDb.model("SubTopic"), subTopics);
+    await upsertAll(instituteDb.model("VocabularyModule"), vocabulary);
+    await upsertAll(instituteDb.model("AudioModule"), audio);
+    await upsertAll(instituteDb.model("VideoModule"), video);
+    await upsertAll(instituteDb.model("TextModule"), text);
+    await upsertAll(instituteDb.model("ExerciseModule"), exercise);
+  } catch (error) {
+    logger.error(`Per-institute DB mirror failed on download (${req.institute.institute_code}, course ${courseId}): ${error.message}`);
+  }
+
+  return sendResponse(res, 200, true, "Course data pulled successfully.", {
+    course,
+    topics: topicsWithContent,
+    last_updated: lastUpdated,
+  });
+});
+
+// Picks the newest timestamp out of a course's own record plus every
+// topic/sub-topic/module under it — lets the frontend know a re-download
+// is needed without re-pulling the full content each time.
+function latestTimestamp(dates) {
+  const valid = dates.filter(Boolean).map((d) => new Date(d).getTime());
+  return valid.length ? new Date(Math.max(...valid)) : null;
+}
+
+// GET /institute/me/courses/:courseId/last-updated
+// Lightweight check (timestamps only) so Settings can show "Update Data"
+// on a course that was already pulled but has since changed upstream.
+const getCourseLastUpdated = asyncHandler(async (req, res) => {
+  const { courseId } = req.params;
+
+  if (!mongoose.Types.ObjectId.isValid(courseId)) {
+    return sendError(res, 404, false, "Course not found.");
+  }
+
+  const institute = await Institute.findById(req.institute._id).select("course_id");
+  const isAssigned = institute.course_id.some(
+    (id) => id.toString() === courseId,
+  );
+  if (!isAssigned) {
+    return sendError(
+      res,
+      403,
+      false,
+      "This course is not assigned to your institute.",
+    );
+  }
+
+  const course = await Course.findOne({ _id: courseId, is_active: true })
+    .select("topic_ids updatedAt")
+    .lean();
+  if (!course) return sendError(res, 404, false, "Course not found.");
+
+  const topics = await Topic.find({
+    _id: { $in: course.topic_ids },
+    is_active: true,
+  })
+    .select("updatedAt")
+    .lean();
+  const topicIds = topics.map((t) => t._id);
+
+  const subTopics = await SubTopic.find({
+    topic_id: { $in: topicIds },
+    is_active: true,
+  })
+    .select("updatedAt")
+    .lean();
+
+  const [vocabulary, audio, video, text, exercise] = await Promise.all([
+    VocabularyModule.find({ topic_id: { $in: topicIds }, is_active: true }).select("updatedAt").lean(),
+    AudioModule.find({ topic_id: { $in: topicIds }, is_active: true }).select("updatedAt").lean(),
+    VideoModule.find({ topic_id: { $in: topicIds }, is_active: true }).select("updatedAt").lean(),
+    TextModule.find({ topic_id: { $in: topicIds }, is_active: true }).select("updatedAt").lean(),
+    ExerciseModule.find({ topic_id: { $in: topicIds }, is_active: true }).select("updatedAt").lean(),
+  ]);
+  const modules = [...vocabulary, ...audio, ...video, ...text, ...exercise];
+
+  const lastUpdated = latestTimestamp([
+    course.updatedAt,
+    ...topics.map((t) => t.updatedAt),
+    ...subTopics.map((s) => s.updatedAt),
+    ...modules.map((m) => m.updatedAt),
+  ]);
+
+  return sendResponse(res, 200, true, "Last updated timestamp fetched.", {
+    last_updated: lastUpdated,
+  });
+});
+
+// GET /institute/verify-code/:code
+// No auth — confirms an institute_code exists before the login step.
+const verifyByCode = asyncHandler(async (req, res) => {
+  const code = req.params.code?.trim().toUpperCase();
+
+  const institute = await Institute.findOne(
+    { institute_code: code, is_active: true },
+    "institute_name institute_code logo",
+  ).lean();
+
+  if (!institute) return sendError(res, 404, false, "Invalid institute code.");
+
+  return sendResponse(res, 200, true, "Institute code verified.", institute);
+});
+
+// POST /institute/send-otp
+// No auth — sends a 6-digit OTP to the institute's registered email so the
+// /config flow can verify the institute before the email/password login step.
+const sendOtp = asyncHandler(async (req, res) => {
+  const code = req.body.institute_code?.trim().toUpperCase();
+
+  const institute = await Institute.findOne({
+    institute_code: code,
+    is_active: true,
+  });
+  if (!institute) return sendError(res, 404, false, "Invalid institute code.");
+
+  const otp = crypto.randomInt(100000, 1000000).toString();
+  institute.otp_code = otp;
+  institute.otp_expires_at = new Date(Date.now() + 10 * 60 * 1000);
+  await institute.save();
+
+  const sent = await emailService.sendInstituteOtpEmail(institute, otp);
+  if (!sent) return sendError(res, 502, false, "Failed to send OTP email.");
+
+  return sendResponse(res, 200, true, "OTP sent to institute email.", {
+    email: institute.email,
+  });
+});
+
+// POST /institute/verify-otp
+// No auth — confirms the OTP sent above, then clears it (single use).
+const verifyOtp = asyncHandler(async (req, res) => {
+  const code = req.body.institute_code?.trim().toUpperCase();
+  const { otp } = req.body;
+
+  const institute = await Institute.findOne(
+    { institute_code: code, is_active: true },
+  ).select("+otp_code +otp_expires_at");
+  if (!institute) return sendError(res, 404, false, "Invalid institute code.");
+
+  if (
+    !institute.otp_code ||
+    !institute.otp_expires_at ||
+    institute.otp_expires_at < new Date()
+  ) {
+    return sendError(res, 400, false, "OTP expired. Please request a new one.");
+  }
+
+  if (institute.otp_code !== otp) {
+    return sendError(res, 400, false, "Invalid OTP.");
+  }
+
+  institute.otp_code = undefined;
+  institute.otp_expires_at = undefined;
+  await institute.save();
+
+  return sendResponse(res, 200, true, "OTP verified successfully.", null);
+});
+
 module.exports = {
   create,
   getAll,
@@ -712,6 +1008,11 @@ module.exports = {
   resendCredentials,
   login,
   logout,
+  verifyByCode,
+  downloadCourseData,
+  getCourseLastUpdated,
+  sendOtp,
+  verifyOtp,
   getMe,
   updateMe,
   getPurchasedCourses,

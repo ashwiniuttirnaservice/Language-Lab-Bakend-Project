@@ -3,6 +3,7 @@ const StudentModuleAttempt = require("../models/StudentModuleAttempt");
 const StudentProgress = require("../models/StudentProgress");
 const asyncHandler = require("../middlewares/asyncHandler");
 const { sendResponse, sendError } = require("../utils/apiResponse");
+const { mirrorToLocal } = require("../utils/instituteDb");
 
 const PASS_THRESHOLD_PERCENT = 40;
 
@@ -78,11 +79,12 @@ const submit = asyncHandler(async (req, res) => {
     time_spent_sec: time_spent_sec || 0,
     is_passed: isPassed,
   });
+  await mirrorToLocal("StudentModuleAttempt", attempt);
 
   // Mirrors the *_complete handling in activityController — every submit
   // (pass or fail) counts the exercise as attempted/complete for progress,
   // so the frontend no longer has to fire a second POST /activity to mark it done.
-  await StudentProgress.findOneAndUpdate(
+  const progress = await StudentProgress.findOneAndUpdate(
     { student_id: req.student._id, module_id: exercise._id, subtopic_id: exercise.sub_topic_id },
     {
       $set: {
@@ -99,6 +101,7 @@ const submit = asyncHandler(async (req, res) => {
     },
     { upsert: true, new: true },
   );
+  await mirrorToLocal("StudentProgress", progress);
 
   return sendResponse(res, 201, true, "Exercise submitted successfully.", {
     attempt,
