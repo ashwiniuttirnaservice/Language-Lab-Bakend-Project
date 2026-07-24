@@ -37,6 +37,10 @@ const InstituteSchema = new Schema(
     // ── Courses selected at creation (multiple allowed) ───
     course_id: [{ type: Schema.Types.ObjectId, ref: "Course" }],
 
+    // ── Courses whose content has been pulled/downloaded ──
+    // Only courses in here can be assigned to students.
+    downloaded_course_ids: [{ type: Schema.Types.ObjectId, ref: "Course" }],
+
     // ── Licenses (array of all key _ids) ──────────
     license_ids: [{ type: Schema.Types.ObjectId, ref: "License" }],
     license_count: { type: Number, default: 0 },
@@ -49,6 +53,10 @@ const InstituteSchema = new Schema(
 
     // ── Email delivery tracking ────────────────────
     credentials_email_sent_at: { type: Date, default: null },
+
+    // ── OTP (institute-code login flow, e.g. /config) ──
+    otp_code: { type: String, select: false },
+    otp_expires_at: { type: Date, select: false },
   },
   { timestamps: true },
 );

@@ -31,6 +31,11 @@ const {
   getPurchasedCourses,
   getDashboard,
   getPublic,
+  verifyByCode,
+  downloadCourseData,
+  getCourseLastUpdated,
+  sendOtp,
+  verifyOtp,
 } = require("../controller/instituteController");
 
 const { getByInstitute } = require("../controller/licenseBatchController");
@@ -51,6 +56,9 @@ const {
 // ── Public ────────────────────────────────────────────────────────────────────
 router.post("/login", validateSchema(loginSchema), login);
 router.get("/public/:id", getPublic);
+router.get("/verify-code/:code", verifyByCode);
+router.post("/send-otp", sendOtp);
+router.post("/verify-otp", verifyOtp);
 
 // ── Courses for select/dropdown (SuperAdmin token) ────────────────────────────
 router.get(
@@ -71,6 +79,18 @@ router.post("/logout", protectInstitute, authorizeRoles("institute"), logout);
 router.get("/me", protectInstitute, authorizeRoles("institute"), getMe);
 router.get("/me/dashboard", protectInstitute, authorizeRoles("institute"), getDashboard);
 router.get("/me/courses", protectInstitute, authorizeRoles("institute"), getPurchasedCourses);
+router.get(
+  "/me/courses/:courseId/download",
+  protectInstitute,
+  authorizeRoles("institute"),
+  downloadCourseData,
+);
+router.get(
+  "/me/courses/:courseId/last-updated",
+  protectInstitute,
+  authorizeRoles("institute"),
+  getCourseLastUpdated,
+);
 router.get(
   "/me/licenses",
   protectInstitute,

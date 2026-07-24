@@ -49,8 +49,18 @@ router.put(
   validateSchema(updateMeSchema),
   updateMe,
 );
-router.get("/me/available-courses", protectStudent, authorizeRoles("student"), getAvailableCourses);
-router.get("/me/courses", protectStudent, authorizeRoles("student"), getMyCourses);
+router.get(
+  "/me/available-courses",
+  protectStudent,
+  authorizeRoles("student"),
+  getAvailableCourses,
+);
+router.get(
+  "/me/courses",
+  protectStudent,
+  authorizeRoles("student"),
+  getMyCourses,
+);
 router.post(
   "/me/purchase-course",
   protectStudent,
@@ -68,6 +78,15 @@ router.post(
   create,
 );
 router.get("/", protectInstitute, authorizeRoles("institute"), getAll);
+// Must be registered before "/:id" — otherwise PUT /:id swallows this path,
+// treating "bulk-assign-courses" as the id and crashing on ObjectId cast.
+router.put(
+  "/bulk-assign-courses",
+  protectInstitute,
+  authorizeRoles("institute"),
+  validateSchema(bulkAssignCoursesSchema),
+  bulkAssignCourses,
+);
 router.get("/:id", protectInstitute, authorizeRoles("institute"), getOne);
 router.put(
   "/:id",
@@ -78,8 +97,18 @@ router.put(
   update,
 );
 router.delete("/:id", protectInstitute, authorizeRoles("institute"), remove);
-router.put("/:id/toggle-status", protectInstitute, authorizeRoles("institute"), toggleStatus);
-router.post("/bulk-upload", protectInstitute, authorizeRoles("institute"), upload.single("studentExcel"), bulkUpload);
-router.post("/bulk-assign-courses", protectInstitute, authorizeRoles("institute"), validateSchema(bulkAssignCoursesSchema), bulkAssignCourses);
+router.put(
+  "/:id/toggle-status",
+  protectInstitute,
+  authorizeRoles("institute"),
+  toggleStatus,
+);
+router.post(
+  "/bulk-upload",
+  protectInstitute,
+  authorizeRoles("institute"),
+  upload.single("studentExcel"),
+  bulkUpload,
+);
 
 module.exports = router;
