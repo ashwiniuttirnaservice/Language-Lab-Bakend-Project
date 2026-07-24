@@ -3,7 +3,6 @@ const StudentProgress = require("../models/StudentProgress");
 const Attendance = require("../models/Attendance");
 const asyncHandler = require("../middlewares/asyncHandler");
 const { sendResponse } = require("../utils/apiResponse");
-const { mirrorToLocal } = require("../utils/instituteDb");
 
 // POST /activity — student logs an action
 const log = asyncHandler(async (req, res) => {
@@ -35,11 +34,10 @@ const log = asyncHandler(async (req, res) => {
     max_score,
     accuracy,
   });
-  await mirrorToLocal("ActivityLog", entry);
 
   // On any *_complete event → upsert StudentProgress
   if (activity_type.endsWith("_complete") && module_id) {
-    const progress = await StudentProgress.findOneAndUpdate(
+    await StudentProgress.findOneAndUpdate(
       { student_id: req.student._id, module_id, subtopic_id: sub_topic_id },
       {
         $set: {
@@ -56,14 +54,13 @@ const log = asyncHandler(async (req, res) => {
       },
       { upsert: true, new: true },
     );
-    await mirrorToLocal("StudentProgress", progress);
   }
 
   // On attendance_marked → upsert today's attendance
   if (activity_type === "attendance_marked") {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    const attendance = await Attendance.findOneAndUpdate(
+    await Attendance.findOneAndUpdate(
       { student_id: req.student._id, institute_id: req.student.institute_id, date: today },
       {
         $setOnInsert: {
@@ -72,9 +69,8 @@ const log = asyncHandler(async (req, res) => {
           license_id: req.student.license_id,
         },
       },
-      { upsert: true, new: true },
+      { upsert: true },
     );
-    await mirrorToLocal("Attendance", attendance);
   }
 
   return sendResponse(res, 201, true, "Activity logged.", entry);
