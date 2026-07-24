@@ -8,7 +8,6 @@ const path = require("path");
 const connectDB = require("./src/config/db");
 
 dotenv.config();
-dotenv.config({ path: ".env.local" }); // institute-side vars (e.g. INSTITUTE_MONGO_URI)
 connectDB();
 
 const registerJobs = require("./src/jobs/sessionCleanup");

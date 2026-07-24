@@ -10,7 +10,6 @@ const ChatHistory = require("../models/ChatHistory");
 const ActivityLog = require("../models/ActivityLog");
 const asyncHandler = require("../middlewares/asyncHandler");
 const { sendResponse, sendError } = require("../utils/apiResponse");
-const { mirrorToLocal } = require("../utils/instituteDb");
 
 const MODULE_MAP = {
   video: VideoModule,
@@ -95,7 +94,7 @@ const ask = asyncHandler(async (req, res) => {
   }
 
   // Save to ChatHistory
-  const chatEntry = await ChatHistory.create({
+  await ChatHistory.create({
     student_id: req.student._id,
     institute_id: req.student.institute_id,
     session_id: req.session_id || null,
@@ -107,10 +106,9 @@ const ask = asyncHandler(async (req, res) => {
     model: OLLAMA_MODEL,
     tokens_used,
   });
-  await mirrorToLocal("ChatHistory", chatEntry);
 
   // Log activity
-  const activityEntry = await ActivityLog.create({
+  await ActivityLog.create({
     student_id:    req.student._id,
     institute_id:  req.student.institute_id,
     topic_id:      subTopic.topic_id?._id,
@@ -118,7 +116,6 @@ const ask = asyncHandler(async (req, res) => {
     module_type,
     activity_type: "ai_query",
   });
-  await mirrorToLocal("ActivityLog", activityEntry);
 
   return sendResponse(res, 200, true, "AI response received.", {
     answer,
