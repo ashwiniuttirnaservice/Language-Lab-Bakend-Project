@@ -4,6 +4,7 @@ const bcrypt = require("bcryptjs");
 const License = require("../models/License");
 const Institute = require("../models/Institute");
 const Session = require("../models/Session");
+const Student = require("../models/Student");
 const asyncHandler = require("../middlewares/asyncHandler");
 const { sendResponse, sendError } = require("../utils/apiResponse");
 const emailService = require("../service/emailService");
@@ -50,13 +51,20 @@ async function fetchLlmPattern() {
 
 // PUT /api/super-admin/institute/:id/license
 const generateBatch = asyncHandler(async (req, res) => {
-  const { license_count, start_date, expiry_date } = req.body;
+  const { license_count, start_date, expiry_date, seats_per_license } = req.body;
 
   if (!license_count || license_count < 1) {
     return sendError(res, 400, false, "license_count must be at least 1.");
   }
   if (!start_date || !expiry_date) {
     return sendError(res, 400, false, "start_date and expiry_date are required.");
+  }
+
+  // How many concurrent students each generated license key allows.
+  // Defaults to 1 (old behavior — one key = one seat) when not specified.
+  const seatsPerLicense = seats_per_license ? Number(seats_per_license) : 1;
+  if (!Number.isInteger(seatsPerLicense) || seatsPerLicense < 1) {
+    return sendError(res, 400, false, "seats_per_license must be a positive integer.");
   }
 
   const institute = await Institute.findById(req.params.id).populate(
@@ -97,7 +105,7 @@ const generateBatch = asyncHandler(async (req, res) => {
       key_index: keyIndex,
       institute_id: institute._id,
       purchased_by: req.admin._id,
-      total_seats: 1,
+      total_seats: seatsPerLicense,
       active_sessions: 0,
       start_date: startDate,
       expiry_date: expiryDate,
@@ -123,6 +131,7 @@ const generateBatch = asyncHandler(async (req, res) => {
       license_key: licenseKey,
       user_id: userId,
       password: plainPassword, // plain — shown ONCE in this response, never stored in plain
+      total_seats: seatsPerLicense,
       status: "active",
     });
   }
@@ -151,6 +160,8 @@ const generateBatch = asyncHandler(async (req, res) => {
     institute_name: institute.institute_name,
     institute_code: institute.institute_code,
     license_count: institute.license_count + license_count,
+    seats_per_license: seatsPerLicense,
+    total_concurrent_seats: license_count * seatsPerLicense,
     start_date,
     expiry_date,
     licenses: generatedKeys,
@@ -168,16 +179,49 @@ const getByInstitute = asyncHandler(async (req, res) => {
   const institute = await Institute.findById(instituteId);
   if (!institute) return sendError(res, 404, false, "Institute not found.");
 
-  const licenses = await License.find({
-    _id: { $in: institute.license_ids },
-  })
+  // Matched by institute_id (the field every License doc is required to
+  // carry) rather than Institute.license_ids — that array is only ever
+  // pushed to from generateBatch, so any license created another way
+  // (manual seeding, a migration, a future admin tool) would silently be
+  // excluded from seat totals if we trusted the array instead.
+  const licenses = await License.find({ institute_id: institute._id })
     .sort({ key_index: 1 })
     .select("-__v");
+
+  const studentsUsed = await Student.countDocuments({ institute_id: institute._id });
+
+  // Aggregate seat/expiry summary across every license key the institute
+  // owns — mirrors the same total_seats/used_seats math as
+  // instituteController.js's getDashboard so the two views never disagree.
+  const totalSeats = licenses.reduce((sum, l) => sum + l.total_seats, 0);
+  const usedSeats = licenses.reduce((sum, l) => sum + l.active_sessions, 0);
+
+  // "Expiry Date" for the institute as a whole is the soonest upcoming
+  // renewal among currently active licenses — the date that actually needs
+  // attention. Falls back to the latest expiry across all licenses if none
+  // are active (e.g. everything already expired).
+  const activeExpiries = licenses
+    .filter((l) => l.status === "active" && l.expiry_date)
+    .map((l) => new Date(l.expiry_date).getTime());
+  const allExpiries = licenses.filter((l) => l.expiry_date).map((l) => new Date(l.expiry_date).getTime());
+  const expiryDate = activeExpiries.length
+    ? new Date(Math.min(...activeExpiries))
+    : allExpiries.length
+    ? new Date(Math.max(...allExpiries))
+    : null;
 
   return sendResponse(res, 200, true, "Licenses fetched successfully.", {
     institute_id: institute._id,
     institute_name: institute.institute_name,
-    license_count: institute.license_count,
+    // Derived from the actual license documents found above, not the
+    // Institute.license_count counter — that field is only ever incremented
+    // inside generateBatch, so it can't be trusted as the source of truth.
+    license_count: licenses.length,
+    max_students: institute.max_students,
+    students_used: studentsUsed,
+    total_seats: totalSeats,
+    used_seats: usedSeats,
+    expiry_date: expiryDate,
     licenses,
   });
 });

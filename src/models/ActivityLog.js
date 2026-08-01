@@ -29,6 +29,10 @@ const ActivityLogSchema = new Schema(
         "vocabulary_start", "vocabulary_submit", "vocabulary_complete", "vocabulary_skip",
         "attendance_marked",
         "ai_query",
+        // Duration-only heartbeat logged when a student switches away from or
+        // leaves a module — the one place every module type (including text/
+        // vocabulary, which have no *_complete event) gets real time tracked.
+        "module_time",
       ],
       required: true,
     },

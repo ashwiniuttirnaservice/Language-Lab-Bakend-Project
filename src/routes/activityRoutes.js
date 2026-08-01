@@ -7,11 +7,12 @@ const protectEditor = require("../middlewares/protectEditor");
 const protectInstitute = require("../middlewares/protectInstitute");
 const authorizeRoles = require("../middlewares/authorizeRoles");
 const { logActivitySchema } = require("../validation/activityValidation");
-const { log, getMyActivity, getStudentActivity } = require("../controller/activityController");
+const { log, getMyActivity, getStudentActivity, heartbeat } = require("../controller/activityController");
 
 // Student
 router.post("/", protectStudent, authorizeRoles("student"), validateSchema(logActivitySchema), log);
 router.get("/me", protectStudent, authorizeRoles("student"), getMyActivity);
+router.post("/heartbeat", protectStudent, authorizeRoles("student"), heartbeat);
 
 // Teacher or College
 router.get("/student/:id", protectEditor, authorizeRoles("editor"), getStudentActivity);

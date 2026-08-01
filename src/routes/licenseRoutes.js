@@ -2,7 +2,11 @@ const express = require("express");
 const router = express.Router();
 
 const { validateSchema } = require("../middlewares/validate");
-const { generateSchema, updateSeatsSchema } = require("../validation/licenseValidation");
+const {
+  generateSchema,
+  updateSeatsSchema,
+  updateLicenseSchema,
+} = require("../validation/licenseValidation");
 const protectSuperAdmin = require("../middlewares/protectSuperAdmin");
 const authorizeRoles = require("../middlewares/authorizeRoles");
 
@@ -15,6 +19,7 @@ const {
   expire,
   renew,
   updateSeats,
+  update,
   remove,
 } = require("../controller/licenseController");
 
@@ -25,6 +30,7 @@ router.post("/generate", validateSchema(generateSchema), generate);
 router.get("/", getAll);
 router.get("/:id", getOne);
 
+router.put("/:id", validateSchema(updateLicenseSchema), update);
 router.put("/:id/activate", activate);
 router.put("/:id/suspend", suspend);
 router.put("/:id/expire", expire);

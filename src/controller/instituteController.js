@@ -14,6 +14,10 @@ const AudioModule = require("../models/AudioModule");
 const VideoModule = require("../models/VideoModule");
 const TextModule = require("../models/TextModule");
 const ExerciseModule = require("../models/ExerciseModule");
+const Task = require("../models/Task");
+const TaskSubmission = require("../models/TaskSubmission");
+const Practical = require("../models/Practical");
+const PracticalSubmission = require("../models/PracticalSubmission");
 const asyncHandler = require("../middlewares/asyncHandler");
 const { sendResponse, sendError } = require("../utils/apiResponse");
 const uploadToAws = require("../utils/awsUpload");
@@ -565,7 +569,9 @@ const getDashboard = asyncHandler(async (req, res) => {
   );
   if (!institute) return sendError(res, 404, false, "Institute not found.");
 
-  const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  const now = new Date();
+  const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const fiveMinutesAgo = new Date(now.getTime() - 5 * 60 * 1000);
 
   const [
     totalStudents,
@@ -574,8 +580,8 @@ const getDashboard = asyncHandler(async (req, res) => {
     coursesLicensedCount,
     licenses,
     progressStats,
-    recentStudents,
-    recentCompletions,
+    onlineCount,
+    activeStudents,
   ] = await Promise.all([
     Student.countDocuments({ institute_id: instituteId }),
     Student.countDocuments({ institute_id: instituteId, createdAt: { $gte: weekAgo } }),
@@ -600,17 +606,17 @@ const getDashboard = asyncHandler(async (req, res) => {
         },
       },
     ]),
-    Student.find({ institute_id: instituteId })
-      .sort({ createdAt: -1 })
-      .limit(5)
-      .select("full_name createdAt")
-      .lean(),
-    StudentProgress.find({ institute_id: instituteId, is_completed: true })
-      .sort({ completed_at: -1 })
-      .limit(5)
-      .populate("student_id", "full_name")
-      .populate("topic_id", "title")
-      .select("completed_at student_id topic_id")
+    Student.countDocuments({
+      institute_id: instituteId,
+      last_seen_at: { $gte: fiveMinutesAgo },
+    }),
+    Student.find({
+      institute_id: instituteId,
+      last_seen_at: { $gte: fiveMinutesAgo },
+    })
+      .sort({ last_login: -1 })
+      .limit(8)
+      .select("full_name last_login")
       .lean(),
   ]);
 
@@ -631,39 +637,60 @@ const getDashboard = asyncHandler(async (req, res) => {
   const completionRate =
     progressTotal > 0 ? Math.round((progressCompleted / progressTotal) * 100) : 0;
 
-  // ── Student growth — cumulative enrolled students, last 6 months ─
-  const now = new Date();
-  const studentGrowth = [];
-  for (let i = 5; i >= 0; i -= 1) {
-    const monthIndex = now.getMonth() - i;
-    const monthStart = new Date(now.getFullYear(), monthIndex, 1);
-    const nextMonthStart = new Date(now.getFullYear(), monthIndex + 1, 1);
-    // eslint-disable-next-line no-await-in-loop
-    const count = await Student.countDocuments({
-      institute_id: instituteId,
-      createdAt: { $lt: nextMonthStart },
-    });
-    studentGrowth.push({
-      month: monthStart.toLocaleString("en-US", { month: "short" }),
-      students: count,
-    });
-  }
+  // ── Assignment completion — Task + Practical, institute-wide ─────
+  const [tasksList, practicalsList, enrollmentRows] = await Promise.all([
+    Task.find({ institute_id: instituteId, is_deleted: false })
+      .select("target course_id student_ids")
+      .lean(),
+    Practical.find({ institute_id: instituteId, is_deleted: false })
+      .select("course_id")
+      .lean(),
+    Student.aggregate([
+      { $match: { institute_id: instituteId } },
+      { $unwind: "$purchased_courses" },
+      { $group: { _id: "$purchased_courses", count: { $sum: 1 } } },
+    ]),
+  ]);
+  const enrollmentByCourse = {};
+  enrollmentRows.forEach((row) => {
+    enrollmentByCourse[row._id.toString()] = row.count;
+  });
 
-  // ── Recent activity feed ────────────────────────────────────────
-  const recentActivity = [
-    ...recentStudents.map((s) => ({
-      type: "student_registered",
-      message: `${s.full_name} registered`,
-      timestamp: s.createdAt,
-    })),
-    ...recentCompletions.map((p) => ({
-      type: "course_completed",
-      message: `${p.student_id?.full_name || "A student"} completed ${p.topic_id?.title || "a topic"}`,
-      timestamp: p.completed_at,
-    })),
-  ]
-    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
-    .slice(0, 8);
+  const taskAssigned = tasksList.reduce(
+    (sum, t) =>
+      sum +
+      (t.target === "selected"
+        ? (t.student_ids || []).length
+        : enrollmentByCourse[t.course_id?.toString()] || 0),
+    0,
+  );
+  const practicalAssigned = practicalsList.reduce(
+    (sum, p) => sum + (enrollmentByCourse[p.course_id?.toString()] || 0),
+    0,
+  );
+
+  const [taskCompleted, practicalCompleted] = await Promise.all([
+    TaskSubmission.countDocuments({
+      task_id: { $in: tasksList.map((t) => t._id) },
+      status: { $in: ["submitted", "late", "reviewed"] },
+    }),
+    PracticalSubmission.countDocuments({
+      practical_id: { $in: practicalsList.map((p) => p._id) },
+      status: { $in: ["submitted", "reviewed"] },
+    }),
+  ]);
+
+  const assignmentTotal = taskAssigned + practicalAssigned;
+  const assignmentCompleted = taskCompleted + practicalCompleted;
+
+  // ── Recent activity feed — currently logged-in students ──────────
+  const recentActivity = activeStudents.map((s) => ({
+    student_id: s._id,
+    full_name: s.full_name,
+    duration_minutes: s.last_login
+      ? Math.max(0, Math.round((now.getTime() - new Date(s.last_login).getTime()) / 60000))
+      : null,
+  }));
 
   return sendResponse(res, 200, true, "Dashboard fetched successfully.", {
     institute_name: institute.institute_name,
@@ -681,7 +708,14 @@ const getDashboard = asyncHandler(async (req, res) => {
       active_licenses: activeLicenses,
     },
     completion_rate: completionRate,
-    student_growth: studentGrowth,
+    login_status_breakdown: {
+      online: onlineCount,
+      offline: Math.max(totalStudents - onlineCount, 0),
+    },
+    assignment_completion: {
+      completed: assignmentCompleted,
+      pending: Math.max(assignmentTotal - assignmentCompleted, 0),
+    },
     student_status_breakdown: {
       ...statusBreakdown,
       total: totalStudents,
@@ -719,8 +753,57 @@ const resendCredentials = asyncHandler(async (req, res) => {
   });
 });
 
+// GET /institute/public
+// No auth — lightweight list of active institutes for the student-login
+// "Select License" dropdown (a student's license pool lives on their institute,
+// so choosing the institute is how they pick their license). Only institutes
+// that are actually ready are listed: has at least one license key, AND has
+// logged into /config and downloaded at least one course — a licensed
+// institute that never pulled course content isn't usable yet either.
+// Optional ?search= filters by institute_name.
+const getPublicList = asyncHandler(async (req, res) => {
+  const filter = {
+    is_active: true,
+    downloaded_course_ids: { $exists: true, $not: { $size: 0 } },
+  };
+
+  if (req.query.search) {
+    filter.institute_name = { $regex: req.query.search.trim(), $options: "i" };
+  }
+
+  const institutes = await Institute.find(filter, "institute_name institute_code logo")
+    .sort({ institute_name: 1 })
+    .lean();
+
+  // Matched by institute_id directly rather than the stale license_count
+  // counter / license_ids array (only ever maintained by generateBatch) —
+  // otherwise an institute with real, active licenses created another way
+  // would silently vanish from the student login dropdown entirely.
+  const activeLicenses = await License.find(
+    { institute_id: { $in: institutes.map((i) => i._id) }, status: "active" },
+    "institute_id license_code",
+  ).lean();
+
+  const codesByInstitute = {};
+  activeLicenses.forEach((l) => {
+    const key = l.institute_id.toString();
+    (codesByInstitute[key] ||= []).push(l.license_code);
+  });
+
+  const result = institutes
+    .filter((inst) => (codesByInstitute[inst._id.toString()] || []).length > 0)
+    .map((inst) => ({
+      ...inst,
+      license_codes: codesByInstitute[inst._id.toString()] || [],
+    }));
+
+  return sendResponse(res, 200, true, "Institutes fetched successfully.", result);
+});
+
 // GET /institute/public/:id
-// No auth — only safe, non-sensitive fields for public display (e.g. landing page).
+// No auth — safe, non-sensitive fields for public display (e.g. landing page),
+// plus a lightweight list of the institute's offered courses (not the full
+// topic/module tree — that stays behind the institute-only download route).
 const getPublic = asyncHandler(async (req, res) => {
   if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
     return sendError(res, 404, false, "Institute not found.");
@@ -728,12 +811,23 @@ const getPublic = asyncHandler(async (req, res) => {
 
   const institute = await Institute.findOne(
     { _id: req.params.id, is_active: true },
-    "institute_name institute_code logo website address.state address.city address.nearbyLandmarks",
-  ).lean();
+    "institute_name institute_code logo website address.state address.city address.nearbyLandmarks course_id",
+  )
+    .populate({
+      path: "course_id",
+      match: { is_active: true },
+      select: "course_name description level language duration_days thumbnail_url",
+    })
+    .lean();
 
   if (!institute) return sendError(res, 404, false, "Institute not found.");
 
-  return sendResponse(res, 200, true, "Institute fetched successfully.", institute);
+  const { course_id: courses, ...instituteFields } = institute;
+
+  return sendResponse(res, 200, true, "Institute fetched successfully.", {
+    ...instituteFields,
+    courses: courses || [],
+  });
 });
 
 // GET /institute/me/courses/:courseId/download
@@ -974,6 +1068,22 @@ const verifyOtp = asyncHandler(async (req, res) => {
   return sendResponse(res, 200, true, "OTP verified successfully.", null);
 });
 
+// GET /institute/active-students-count
+// Counts students of this institute whose last_seen_at heartbeat landed
+// within the last 5 minutes — powers the dashboard's "Active Now" tile.
+const getActiveStudentsCount = asyncHandler(async (req, res) => {
+  const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+
+  const count = await Student.countDocuments({
+    institute_id: req.institute._id,
+    last_seen_at: { $gte: fiveMinutesAgo },
+  });
+
+  return sendResponse(res, 200, true, "Active students count fetched successfully.", {
+    active_count: count,
+  });
+});
+
 module.exports = {
   create,
   getAll,
@@ -995,4 +1105,6 @@ module.exports = {
   getPurchasedCourses,
   getDashboard,
   getPublic,
+  getPublicList,
+  getActiveStudentsCount,
 };

@@ -7,7 +7,10 @@ const StudentSchema = new Schema(
     full_name: { type: String, required: true, trim: true },
     // email is optional — login uses enrollment_no, not email
     email: { type: String, unique: true, sparse: true, lowercase: true },
-    // password not required — login is enrollment_no ONLY (no password check)
+    // login = institute + enrollment_no + password. If not set explicitly at
+    // creation, controllers default this to enrollment_no. Stored as PLAIN
+    // TEXT (not hashed) so institute staff can always look up and return the
+    // real current password via the API.
     password: { type: String },
     role: { type: String, default: "student", immutable: true },
     phone: { type: String },
@@ -40,6 +43,9 @@ const StudentSchema = new Schema(
     // ── Status ─────────────────────────────────────
     is_active: { type: Boolean, default: true },
     last_login: { type: Date },
+    // Updated by POST /activity/heartbeat — powers the institute dashboard's
+    // "Active Now" tile (last_seen_at within the last few minutes).
+    last_seen_at: { type: Date },
     status: {
       type: String,
       enum: ["active", "inactive", "suspended"],
@@ -48,6 +54,11 @@ const StudentSchema = new Schema(
   },
   { timestamps: true },
 );
+
+StudentSchema.methods.comparePassword = function comparePassword(plain) {
+  if (!this.password) return Promise.resolve(false);
+  return Promise.resolve(plain === this.password);
+};
 
 StudentSchema.index({ institute_id: 1, status: 1 });
 StudentSchema.index({ roll_no: 1, institute_id: 1 });

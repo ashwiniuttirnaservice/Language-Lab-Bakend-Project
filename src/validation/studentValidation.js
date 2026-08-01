@@ -11,6 +11,8 @@ const createStudentSchema = Joi.object({
   segment: Joi.string().trim(),
   year: Joi.number().integer().min(1).max(6),
   institute_id: objectId.required(),
+  // optional — if omitted, controller defaults it to enrollment_no
+  password: Joi.string().trim().min(1).max(72),
 });
 
 const updateStudentSchema = Joi.object({
@@ -22,6 +24,7 @@ const updateStudentSchema = Joi.object({
   year: Joi.number().integer().min(1).max(6),
   status: Joi.string().valid("active", "inactive", "suspended"),
   is_active: Joi.boolean(),
+  password: Joi.string().trim().min(1).max(72),
 });
 
 const updateMeSchema = Joi.object({
@@ -30,7 +33,10 @@ const updateMeSchema = Joi.object({
 });
 
 const loginSchema = Joi.object({
+  institute_id: objectId.required(),   // "Select License" dropdown — the institute the student belongs to
+  license_code: Joi.string().trim().required(),   // which specific license's seats to check
   enrollment_no: Joi.string().trim().required(),
+  password: Joi.string().min(1).required(),
 });
 
 const bulkRowSchema = Joi.object({
@@ -41,6 +47,8 @@ const bulkRowSchema = Joi.object({
   enrollment_no: Joi.string().trim().required(),
   segment: Joi.string().trim().allow("", null),
   year: Joi.number().integer().min(1).max(6).allow(null, ""),
+  // optional — if omitted, controller defaults it to enrollment_no
+  password: Joi.string().trim().min(1).max(72).allow("", null),
 });
 
 const purchaseCourseSchema = Joi.object({
