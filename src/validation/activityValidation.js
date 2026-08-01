@@ -14,6 +14,7 @@ const logActivitySchema = Joi.object({
     "exercise_start", "exercise_submit", "exercise_complete", "exercise_skip",
     "vocabulary_start", "vocabulary_submit", "vocabulary_complete", "vocabulary_skip",
     "attendance_marked", "ai_query",
+    "module_time",
   ).required(),
   progress_percent: Joi.number().min(0).max(100),
   timestamp_in_media: Joi.number().min(0),

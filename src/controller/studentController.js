@@ -27,6 +27,7 @@ const create = asyncHandler(async (req, res) => {
     segment,
     year,
     institute_id,
+    password,
   } = req.body;
 
   if (!enrollment_no)
@@ -42,8 +43,10 @@ const create = asyncHandler(async (req, res) => {
       return sendError(res, 409, false, "Email already registered.");
   }
 
-  const instituteExists = await Institute.exists({ _id: institute_id });
-  if (!instituteExists)
+  const institute = await Institute.findById(institute_id).select(
+    "institute_code",
+  );
+  if (!institute)
     return sendError(res, 404, false, "Institute not found.");
 
   let profilePhoto = "";
@@ -56,6 +59,10 @@ const create = asyncHandler(async (req, res) => {
     profilePhoto = uploaded?.cdnUrl || uploaded?.fullS3URL || "";
   }
 
+  // Auto-generated scheme: institute_code + enrollment_no (e.g. ABC + EN2024001).
+  // Only used when the caller doesn't supply their own password.
+  const autoPassword = `${institute.institute_code}${enrollment_no}`;
+
   const student = await Student.create({
     full_name,
     email: email ? email.toLowerCase() : undefined,
@@ -66,6 +73,7 @@ const create = asyncHandler(async (req, res) => {
     segment,
     year,
     institute_id,
+    password: password || autoPassword, // hashed by the pre-save hook
   });
 
   return sendResponse(res, 201, true, "Student created successfully.", {
@@ -74,6 +82,7 @@ const create = asyncHandler(async (req, res) => {
     enrollment_no: student.enrollment_no,
     roll_no: student.roll_no,
     institute_id: student.institute_id,
+    password: student.password, // bcrypt hash, not the plaintext value
   });
 });
 
@@ -181,6 +190,7 @@ const getAll = asyncHandler(async (req, res) => {
         createdAt: 1,
         institute: 1,
         purchased_courses: "$purchased_courses_detail",
+        password: 1, // bcrypt hash, not the plaintext value
       },
     },
   ]);
@@ -238,6 +248,7 @@ const update = asyncHandler(async (req, res) => {
     year,
     status,
     is_active,
+    password,
   } = req.body;
 
   if (full_name !== undefined) student.full_name = full_name;
@@ -248,6 +259,7 @@ const update = asyncHandler(async (req, res) => {
   if (year !== undefined) student.year = year;
   if (status !== undefined) student.status = status;
   if (is_active !== undefined) student.is_active = is_active;
+  if (password) student.password = password; // re-hashed by the pre-save hook
 
   if (req.file) {
     const uploaded = await uploadToAws({
@@ -293,21 +305,39 @@ const toggleStatus = asyncHandler(async (req, res) => {
   );
 });
 
-// ── Student: login (checks license seats) ────────────────────────────────────
+// ── Student: login (institute + enrollment_no + password + license_code, then checks seats on that license only) ──
 const login = asyncHandler(async (req, res) => {
-  const { enrollment_no } = req.body;
+  const { institute_id, enrollment_no, password, license_code } = req.body;
 
-  if (!enrollment_no)
-    return sendError(res, 400, false, "enrollment_no is required.");
-
-  const student = await Student.findOne({ enrollment_no });
-  if (!student)
+  if (!institute_id || !enrollment_no || !password || !license_code)
     return sendError(
       res,
-      401,
+      400,
       false,
-      "No account found with this enrollment number.",
+      "institute_id, enrollment_no, password and license_code are required.",
     );
+
+  const student = await Student.findOne({ enrollment_no });
+
+  // Same generic message whether the enrollment_no doesn't exist, belongs to a
+  // different institute than the one picked in the dropdown, or the password
+  // is wrong — never reveal which part of the credential triple failed.
+  const invalidCredentials = () =>
+    sendError(res, 401, false, "Invalid institute, enrollment number, or password.");
+
+  if (!student || student.institute_id.toString() !== institute_id)
+    return invalidCredentials();
+
+  if (!student.password)
+    return sendError(
+      res,
+      403,
+      false,
+      "No password set for this account yet. Contact your institute.",
+    );
+
+  const passwordMatches = await student.comparePassword(password);
+  if (!passwordMatches) return invalidCredentials();
 
   if (!student.is_active || student.status !== "active")
     return sendError(
@@ -317,20 +347,27 @@ const login = asyncHandler(async (req, res) => {
       "Your account has been suspended. Contact your institute.",
     );
 
-  // Load institute to get license_ids[]
-  const Institute = require("../models/Institute");
   const institute = await Institute.findById(student.institute_id);
 
   if (!institute) {
     return sendError(res, 403, false, "Institute not found.");
   }
 
-  if (!institute.license_ids || institute.license_ids.length === 0) {
+  // Seats are enforced per license code — no pooling across an institute's
+  // other license keys. The student picks a specific license at login, and
+  // only that license's seat count is checked; a full license never falls
+  // back to a different one automatically.
+  const license = await License.findOne({
+    license_code,
+    institute_id: institute._id,
+  });
+
+  if (!license) {
     return sendError(
       res,
-      403,
+      404,
       false,
-      "Your institute does not have any license keys. Contact admin.",
+      "License not found for this institute. Select a valid license.",
     );
   }
 
@@ -349,6 +386,10 @@ const login = asyncHandler(async (req, res) => {
   }).sort({ logged_in_at: -1 });
 
   if (existingSession) {
+    const existingLicense = await License.findById(existingSession.license_id).select(
+      "license_code",
+    );
+
     return sendResponse(res, 200, true, `Welcome back, ${student.full_name}!`, {
       token: existingSession.token,
       student: {
@@ -362,6 +403,7 @@ const login = asyncHandler(async (req, res) => {
         profilePhoto: student.profilePhoto,
         last_login: student.last_login,
       },
+      license_code: existingLicense?.license_code || null,
     });
   }
 
@@ -371,115 +413,35 @@ const login = asyncHandler(async (req, res) => {
     { $set: { is_active: false } },
   );
 
-  // Recalibrate active_sessions on every license in this institute by counting
-  // actual live (non-expired) sessions. This corrects any counter drift from
-  // crashes, repeated test logins, missed logouts, or cron delays.
-  const liveCounts = await Session.aggregate([
-    {
-      $match: {
-        license_id: { $in: institute.license_ids },
-        is_active: true,
-        expires_at: { $gt: now },
-      },
-    },
-    { $group: { _id: "$license_id", count: { $sum: 1 } } },
-  ]);
-
-  const countMap = {};
-  for (const row of liveCounts) {
-    countMap[row._id.toString()] = row.count;
-  }
-
-  await Promise.all(
-    institute.license_ids.map((licId) =>
-      License.findByIdAndUpdate(licId, {
-        $set: { active_sessions: countMap[licId.toString()] ?? 0 },
-      }),
-    ),
-  );
-
-  // Find any license key that is active, not expired, and has a free seat
-  let license = await License.findOne({
-    _id: { $in: institute.license_ids },
-    status: "active",
-    start_date: { $lte: now },
-    expiry_date: { $gte: now },
-    $expr: { $lt: ["$active_sessions", "$total_seats"] },
+  // Recalibrate active_sessions on this license only by counting actual live
+  // (non-expired) sessions. This corrects any counter drift from crashes,
+  // repeated test logins, missed logouts, or cron delays.
+  const liveCount = await Session.countDocuments({
+    license_id: license._id,
+    is_active: true,
+    expires_at: { $gt: now },
   });
 
-  if (!license) {
-    // Find out exact reason for better error message
-    const anyActive = await License.findOne({
-      _id: { $in: institute.license_ids },
-      status: "active",
-    });
+  license.active_sessions = liveCount;
+  await license.save();
 
-    if (!anyActive) {
-      return sendError(
-        res,
-        403,
-        false,
-        "Your institute license is not active. Contact admin.",
-      );
-    }
+  if (license.status !== "active") {
+    return sendError(res, 403, false, "This license is not active. Contact admin.");
+  }
 
-    const notExpired = await License.findOne({
-      _id: { $in: institute.license_ids },
-      status: "active",
-      expiry_date: { $gte: now },
-    });
+  if (license.expiry_date < now) {
+    return sendError(res, 403, false, "This license has expired. Contact admin.");
+  }
 
-    if (!notExpired) {
-      return sendError(
-        res,
-        403,
-        false,
-        "Your institute license has expired. Contact admin.",
-      );
-    }
+  if (license.start_date > now) {
+    return sendError(res, 403, false, "This license has not started yet. Contact admin.");
+  }
 
-    const started = await License.findOne({
-      _id: { $in: institute.license_ids },
-      status: "active",
-      expiry_date: { $gte: now },
-      start_date: { $lte: now },
-    });
-
-    if (!started) {
-      return sendError(
-        res,
-        403,
-        false,
-        "Your institute license has not started yet. Contact admin.",
-      );
-    }
-
-    const debugLicenses = await License.find(
-      { _id: { $in: institute.license_ids } },
-      {
-        license_code: 1,
-        status: 1,
-        active_sessions: 1,
-        total_seats: 1,
-        start_date: 1,
-        expiry_date: 1,
-      },
-    ).lean();
-
-    const debugSessions = await Session.find(
-      { license_id: { $in: institute.license_ids }, is_active: true },
-      { student_id: 1, license_id: 1, expires_at: 1, is_active: 1 },
-    ).lean();
-
+  if (license.active_sessions >= license.total_seats) {
     return res.status(403).json({
       statusCode: 403,
       success: false,
-      message: `All ${institute.license_count} seats are currently in use.`,
-      debug: {
-        now,
-        licenses: debugLicenses,
-        active_sessions_in_db: debugSessions,
-      },
+      message: `No free seats available for license ${license.license_code}. Please select another license.`,
     });
   }
 
@@ -488,8 +450,10 @@ const login = asyncHandler(async (req, res) => {
     $inc: { active_sessions: 1 },
   });
 
-  // Create session (expires in 8 hours)
-  const expiresAt = new Date(Date.now() + 8 * 60 * 60 * 1000);
+  // Create session — matches the frontend login cookie's 7-day lifetime, so
+  // an active student is never logged out mid-task by a fixed clock running
+  // out independently of the cookie they still hold.
+  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
   const session = await Session.create({
     student_id: student._id,
     license_id: license._id,
@@ -520,6 +484,7 @@ const login = asyncHandler(async (req, res) => {
       profilePhoto: student.profilePhoto,
       last_login: student.last_login,
     },
+    license_code: license.license_code,
   });
 });
 
@@ -534,6 +499,10 @@ const logout = asyncHandler(async (req, res) => {
       });
     }
   }
+
+  // Clear last_seen_at so dashboard "active now" / login-status stats reflect
+  // this logout immediately instead of waiting out the 5-min heartbeat decay.
+  await Student.findByIdAndUpdate(req.student._id, { $unset: { last_seen_at: "" } });
 
   return sendResponse(res, 200, true, "Logged out successfully.");
 });
@@ -554,6 +523,7 @@ const getMe = asyncHandler(async (req, res) => {
       },
     },
     { $unwind: { path: "$institute", preserveNullAndEmptyArrays: true } },
+    { $project: { password: 0 } },
   ]);
 
   return sendResponse(res, 200, true, "Profile fetched successfully.", student);
@@ -579,7 +549,9 @@ const updateMe = asyncHandler(async (req, res) => {
 
   await student.save();
 
-  return sendResponse(res, 200, true, "Profile updated successfully.", student);
+  const { password: _pw, ...safeStudent } = student.toObject();
+
+  return sendResponse(res, 200, true, "Profile updated successfully.", safeStudent);
 });
 
 // ── College: bulk upload students from Excel ──────────────────────────────────
@@ -590,8 +562,10 @@ const bulkUpload = asyncHandler(async (req, res) => {
   if (!institute_id)
     return sendError(res, 400, false, "institute_id is required.");
 
-  const instituteExists = await Institute.exists({ _id: institute_id });
-  if (!instituteExists)
+  const institute = await Institute.findById(institute_id).select(
+    "institute_code",
+  );
+  if (!institute)
     return sendError(res, 404, false, "Institute not found.");
 
   // Parse Excel
@@ -623,6 +597,7 @@ const bulkUpload = asyncHandler(async (req, res) => {
       ).trim(),
       segment: String(row["segment"] || row["Segment"] || "").trim() || null,
       year: Number(row["year"] || row["Year"]) || null,
+      password: String(row["password"] || row["Password"] || "").trim() || null,
     };
 
     const { error: rowError, value: validated } = bulkRowSchema.validate(
@@ -681,6 +656,9 @@ const bulkUpload = asyncHandler(async (req, res) => {
       if (emailTaken) finalEmail = undefined;
     }
 
+    // Same scheme as single create: institute_code + enrollment_no.
+    const autoPassword = `${institute.institute_code}${validated.enrollment_no}`;
+
     try {
       const student = new Student({
         full_name: validated.full_name,
@@ -691,6 +669,7 @@ const bulkUpload = asyncHandler(async (req, res) => {
         segment: validated.segment || undefined,
         year: validated.year || undefined,
         institute_id,
+        password: validated.password || autoPassword, // hashed on save
       });
       await student.save();
 
@@ -698,6 +677,9 @@ const bulkUpload = asyncHandler(async (req, res) => {
         row: rowNum,
         enrollment_no: validated.enrollment_no,
         id: student._id,
+        password: student.password, // bcrypt hash, not the plaintext value
+        // Shown ONCE — only present when the sheet's password column was blank.
+        generated_password: validated.password ? undefined : autoPassword,
       });
     } catch (err) {
       failed.push({

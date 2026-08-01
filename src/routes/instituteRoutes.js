@@ -31,6 +31,8 @@ const {
   getPurchasedCourses,
   getDashboard,
   getPublic,
+  getPublicList,
+  getActiveStudentsCount,
   verifyByCode,
   downloadCourseData,
   getCourseLastUpdated,
@@ -39,6 +41,21 @@ const {
 } = require("../controller/instituteController");
 
 const { getByInstitute } = require("../controller/licenseBatchController");
+
+const {
+  getTopicDetails,
+  getExerciseReport,
+  getPracticalReport,
+  getTaskReport,
+} = require("../controller/studentReportController");
+
+const {
+  getActivityLog,
+  exportActivityLog,
+  getProgressReport,
+  getStudentActivitySummary,
+  getStudentActivityHistory,
+} = require("../controller/activityReportController");
 
 // Parse address from JSON string → object (sent as multipart field)
 const parseAddress = (req, _res, next) => {
@@ -55,6 +72,7 @@ const {
 
 // ── Public ────────────────────────────────────────────────────────────────────
 router.post("/login", validateSchema(loginSchema), login);
+router.get("/public", getPublicList);
 router.get("/public/:id", getPublic);
 router.get("/verify-code/:code", verifyByCode);
 router.post("/send-otp", sendOtp);
@@ -78,6 +96,12 @@ router.get(
 router.post("/logout", protectInstitute, authorizeRoles("institute"), logout);
 router.get("/me", protectInstitute, authorizeRoles("institute"), getMe);
 router.get("/me/dashboard", protectInstitute, authorizeRoles("institute"), getDashboard);
+router.get(
+  "/active-students-count",
+  protectInstitute,
+  authorizeRoles("institute"),
+  getActiveStudentsCount,
+);
 router.get("/me/courses", protectInstitute, authorizeRoles("institute"), getPurchasedCourses);
 router.get(
   "/me/courses/:courseId/download",
@@ -104,6 +128,64 @@ router.put(
   upload.single("logo"),
   validateSchema(updateMeSchema),
   updateMe,
+);
+
+// ── Institute: per-student reports (Student Statistics tabs) ──────────────────
+router.get(
+  "/students/:id/topic-details",
+  protectInstitute,
+  authorizeRoles("institute"),
+  getTopicDetails,
+);
+router.get(
+  "/students/:id/exercise-report",
+  protectInstitute,
+  authorizeRoles("institute"),
+  getExerciseReport,
+);
+router.get(
+  "/students/:id/practical-report",
+  protectInstitute,
+  authorizeRoles("institute"),
+  getPracticalReport,
+);
+router.get(
+  "/students/:id/task-report",
+  protectInstitute,
+  authorizeRoles("institute"),
+  getTaskReport,
+);
+router.get(
+  "/students/:id/progress-report",
+  protectInstitute,
+  authorizeRoles("institute"),
+  getProgressReport,
+);
+router.get(
+  "/students/:id/activity-summary",
+  protectInstitute,
+  authorizeRoles("institute"),
+  getStudentActivitySummary,
+);
+router.get(
+  "/students/:id/activity-history",
+  protectInstitute,
+  authorizeRoles("institute"),
+  getStudentActivityHistory,
+);
+
+// ── Institute: activity log (Student Activity Log) ────────────────────────────
+router.get(
+  "/activity-log/export",
+  protectInstitute,
+  authorizeRoles("institute"),
+  exportActivityLog,
+);
+router.get(
+  "/activity-log",
+  protectInstitute,
+  authorizeRoles("institute"),
+  getActivityLog,
 );
 
 // ── Super Admin ───────────────────────────────────────────────────────────────

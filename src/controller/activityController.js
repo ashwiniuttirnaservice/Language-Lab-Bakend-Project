@@ -1,6 +1,7 @@
 const ActivityLog = require("../models/ActivityLog");
 const StudentProgress = require("../models/StudentProgress");
 const Attendance = require("../models/Attendance");
+const Student = require("../models/Student");
 const asyncHandler = require("../middlewares/asyncHandler");
 const { sendResponse } = require("../utils/apiResponse");
 
@@ -102,4 +103,12 @@ const getStudentActivity = asyncHandler(async (req, res) => {
   return sendResponse(res, 200, true, "Activity fetched successfully.", logs);
 });
 
-module.exports = { log, getMyActivity, getStudentActivity };
+// POST /activity/heartbeat — student client pings ~every 60s while a tab is
+// open; institute's "Active Now" count reads last_seen_at within the last 5 min.
+const heartbeat = asyncHandler(async (req, res) => {
+  await Student.findByIdAndUpdate(req.student._id, { last_seen_at: new Date() });
+
+  return sendResponse(res, 200, true, "Heartbeat recorded.");
+});
+
+module.exports = { log, getMyActivity, getStudentActivity, heartbeat };

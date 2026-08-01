@@ -57,6 +57,11 @@ async function uploadToAws({ file, fileName, folderName }) {
     return response.data?.data;
   } catch (error) {
     console.error("AWS Upload Error:", error.response?.data || error.message);
+    if (error.response?.status === 413) {
+      throw new Error(
+        "File too large for the upload service (rejected by AWS upload proxy). Increase client_max_body_size on aws-upload.uttirna.in."
+      );
+    }
     throw new Error("Failed to upload file to AWS");
   } finally {
 

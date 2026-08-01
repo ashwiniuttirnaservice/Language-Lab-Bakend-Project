@@ -4,9 +4,14 @@ const router = express.Router();
 
 router.use("/super-admin", require("./routes/superAdminRoutes"));
 router.use("/license", require("./routes/licenseRoutes"));
+// Alias — some frontends call license management under /admin/licenses.
+// Same router/controllers as /license, just mounted at a second path.
+router.use("/admin/licenses", require("./routes/licenseRoutes"));
 router.use("/institute", require("./routes/instituteRoutes"));
 router.use("/editor", require("./routes/editorRoutes"));
 router.use("/student", require("./routes/studentRoutes"));
+router.use("/practical", require("./routes/practicalRoutes"));
+router.use("/task", require("./routes/taskRoutes"));
 router.use("/topic", require("./routes/topicRoutes"));
 router.use("/subtopic", require("./routes/subTopicRoutes"));
 router.use("/module", require("./routes/moduleRoutes"));

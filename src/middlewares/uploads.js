@@ -7,6 +7,13 @@ const fs = require("fs");
 // Add new file fields here as the project grows.
 // ─────────────────────────────────────────────
 const getFolderPath = (fieldname) => {
+  // Per-question practical submission files — one dynamic field per
+  // question ("question_file_{questionId}"), so they can't be a fixed
+  // switch case like the other named fields below.
+  if (fieldname.startsWith("question_file_")) {
+    return "uploads/practical-submissions";
+  }
+
   switch (fieldname) {
     case "profileImage":
       return "uploads/super-admin";
@@ -18,6 +25,14 @@ const getFolderPath = (fieldname) => {
       return "uploads/students";
     case "studentExcel":
       return "uploads/students/excel";
+    case "practicalAttachment":
+      return "uploads/practicals";
+    case "practicalSubmissionAttachment":
+      return "uploads/practical-submissions";
+    case "taskMedia":
+      return "uploads/tasks";
+    case "taskSubmissionMedia":
+      return "uploads/task-submissions";
     case "videoFile":
       return "uploads/modules/videos";
     case "audioFile":

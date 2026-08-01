@@ -47,10 +47,14 @@ const generate = asyncHandler(async (req, res) => {
   );
 });
 
-// GET /license
+// GET /license?instituteId=&status=
 const getAll = asyncHandler(async (req, res) => {
-  const licenses = await License.find()
-    .populate("institute_id", "name")
+  const filter = {};
+  if (req.query.instituteId) filter.institute_id = req.query.instituteId;
+  if (req.query.status) filter.status = req.query.status;
+
+  const licenses = await License.find(filter)
+    .populate("institute_id", "institute_name institute_code")
     .populate("purchased_by", "full_name email")
     .sort({ createdAt: 1 });
 
@@ -176,6 +180,43 @@ const renew = asyncHandler(async (req, res) => {
   return sendResponse(res, 200, true, "License renewed successfully.", license);
 });
 
+// PUT /license/:id — generic admin edit (status / dates / seats in one call,
+// as opposed to the single-purpose activate/suspend/expire/renew/seats actions above)
+const update = asyncHandler(async (req, res) => {
+  const { status, start_date, expiry_date, total_seats } = req.body;
+
+  const license = await License.findById(req.params.id);
+  if (!license) return sendError(res, 404, false, "License not found.");
+
+  if (total_seats !== undefined) {
+    if (total_seats < license.active_sessions) {
+      return sendError(
+        res,
+        400,
+        false,
+        `Cannot reduce seats below active sessions (${license.active_sessions}).`,
+      );
+    }
+    license.total_seats = total_seats;
+  }
+
+  if (start_date !== undefined) license.start_date = new Date(start_date);
+  if (expiry_date !== undefined) license.expiry_date = new Date(expiry_date);
+  if (status !== undefined) license.status = status;
+
+  if (license.expiry_date <= license.start_date) {
+    return sendError(res, 400, false, "expiry_date must be after start_date.");
+  }
+
+  license.duration = Math.ceil(
+    (license.expiry_date - license.start_date) / 86400000,
+  );
+
+  await license.save();
+
+  return sendResponse(res, 200, true, "License updated successfully.", license);
+});
+
 // DELETE /license/:id
 const remove = asyncHandler(async (req, res) => {
   const license = await License.findByIdAndDelete(req.params.id);
@@ -194,5 +235,6 @@ module.exports = {
   expire,
   renew,
   updateSeats,
+  update,
   remove,
 };
