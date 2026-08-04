@@ -144,13 +144,20 @@ const getAllForAdmin = asyncHandler(async (req, res) => {
   });
 });
 
-// ── Institute: list students (optional ?segment= ?year= filters) ──────────────
+// ── Institute: list students (optional ?segment= ?year= ?page= ?limit= filters) ─
 const getAll = asyncHandler(async (req, res) => {
   const matchStage = { institute_id: new Types.ObjectId(req.institute._id) };
   if (req.query.segment) matchStage.segment = req.query.segment;
   if (req.query.year) matchStage.year = Number(req.query.year);
 
-  const students = await Student.aggregate([
+  // page/limit are optional — omit both to keep the old "return everything"
+  // behavior for callers (e.g. the current student list UI) that still do
+  // their own client-side pagination over the full list.
+  const paginated = req.query.page !== undefined || req.query.limit !== undefined;
+  const page = Math.max(1, Number(req.query.page) || 1);
+  const limit = Math.min(200, Number(req.query.limit) || 50);
+
+  const pipeline = [
     { $match: matchStage },
     { $sort: { createdAt: 1 } },
     {
@@ -174,7 +181,6 @@ const getAll = asyncHandler(async (req, res) => {
     },
     {
       $project: {
-        _id: 0,
         _id: "$_id",
         full_name: 1,
         email: 1,
@@ -193,11 +199,31 @@ const getAll = asyncHandler(async (req, res) => {
         password: 1, // bcrypt hash, not the plaintext value
       },
     },
-  ]);
+  ];
+
+  if (!paginated) {
+    const students = await Student.aggregate(pipeline);
+    return sendResponse(res, 200, true, "Students fetched successfully.", {
+      total: students.length,
+      students,
+    });
+  }
+
+  pipeline.push({
+    $facet: {
+      students: [{ $skip: (page - 1) * limit }, { $limit: limit }],
+      totalCount: [{ $count: "count" }],
+    },
+  });
+
+  const [result] = await Student.aggregate(pipeline);
+  const total = result?.totalCount?.[0]?.count || 0;
 
   return sendResponse(res, 200, true, "Students fetched successfully.", {
-    total: students.length,
-    students,
+    total,
+    page,
+    limit,
+    students: result?.students || [],
   });
 });
 
@@ -372,17 +398,26 @@ const login = asyncHandler(async (req, res) => {
   }
 
   const now = new Date();
+  const userAgent = req.headers["user-agent"] || "";
 
-  // If the student already has a live, non-expired session, hand back that same
-  // token instead of invalidating it. Without this, every repeated/duplicate
-  // login call (multiple tabs, a frontend retry, a double-mount effect, etc.)
-  // kills the session the previous call just issued, so that token dies within
-  // seconds even though its JWT exp is still days away.
+  // If the student already has a live, non-expired session FROM THE SAME
+  // BROWSER, hand back that same token instead of invalidating it. Without
+  // this, every repeated/duplicate login call (multiple tabs, a frontend
+  // retry, a double-mount effect, etc.) kills the session the previous call
+  // just issued, so that token dies within seconds even though its JWT exp
+  // is still days away.
+  //
+  // The user_agent match is what keeps this from being reused across a
+  // genuinely different device — a second desktop logging in with the same
+  // credentials has a different user agent, so it falls through to the
+  // "close old sessions, issue a new one" path below and spends its own seat,
+  // instead of silently sharing the first device's seat.
   const existingSession = await Session.findOne({
     student_id: student._id,
     is_active: true,
     expires_at: { $gt: now },
     token: { $ne: null },
+    user_agent: userAgent,
   }).sort({ logged_in_at: -1 });
 
   if (existingSession) {
@@ -460,6 +495,7 @@ const login = asyncHandler(async (req, res) => {
     institute_id: student.institute_id,
     expires_at: expiresAt,
     is_active: true,
+    user_agent: userAgent,
   });
 
   student.last_login = new Date();
