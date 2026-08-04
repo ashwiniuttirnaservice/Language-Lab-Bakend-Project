@@ -206,7 +206,7 @@ const update = asyncHandler(async (req, res) => {
   return sendResponse(res, 200, true, "Task updated successfully.", task);
 });
 
-// GET /task?courseId=&status=
+// GET /task?courseId=&status=&page=&limit=
 const getAll = asyncHandler(async (req, res) => {
   const match = {
     institute_id: new Types.ObjectId(req.institute._id),
@@ -216,11 +216,22 @@ const getAll = asyncHandler(async (req, res) => {
   if (req.query.topicId) match.topic_id = new Types.ObjectId(req.query.topicId);
   if (req.query.status) match.status = req.query.status;
 
-  const tasks = await Task.find(match)
-    .populate("course_id", "course_name course_code")
-    .populate("topic_id", "title")
-    .sort({ createdAt: -1 })
-    .lean();
+  // page/limit are optional — omit both to keep the old "return everything" behavior
+  // for any caller that hasn't opted into pagination yet.
+  const paginated = req.query.page !== undefined || req.query.limit !== undefined;
+  const page = Math.max(1, Number(req.query.page) || 1);
+  const limit = Math.min(100, Number(req.query.limit) || 20);
+
+  const [tasks, total] = await Promise.all([
+    Task.find(match)
+      .populate("course_id", "course_name course_code")
+      .populate("topic_id", "title")
+      .sort({ createdAt: -1 })
+      .skip(paginated ? (page - 1) * limit : 0)
+      .limit(paginated ? limit : 0)
+      .lean(),
+    Task.countDocuments(match),
+  ]);
 
   // Assigned / submitted counts per task, computed rather than stored.
   const taskIds = tasks.map((t) => t._id);
@@ -255,7 +266,9 @@ const getAll = asyncHandler(async (req, res) => {
   }));
 
   return sendResponse(res, 200, true, "Tasks fetched successfully.", {
-    total: withCounts.length,
+    total,
+    page: paginated ? page : 1,
+    limit: paginated ? limit : total,
     tasks: withCounts,
   });
 });

@@ -7,6 +7,10 @@ const SessionSchema = new Schema(
     license_id: { type: Schema.Types.ObjectId, ref: "License", required: true },
     institute_id: { type: Schema.Types.ObjectId, ref: "Institute", required: true },
     token: { type: String },
+    // Used to tell "same browser, another tab / a double-mount retry" apart
+    // from a genuinely different device — only the former should reuse the
+    // existing session instead of spending another license seat.
+    user_agent: { type: String },
     logged_in_at: { type: Date, default: Date.now },
     expires_at: { type: Date, required: true },
     is_active: { type: Boolean, default: true },
