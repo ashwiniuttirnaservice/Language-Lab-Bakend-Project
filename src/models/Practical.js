@@ -14,8 +14,9 @@ const QuestionSchema = new Schema(
     // How many ruled lines the student sees when answering this question.
     answer_lines: { type: Number, required: true, min: 1, max: 50, default: 5 },
     // Institute-chosen answer format for this question — "text" shows the
-    // rich text editor, "file" shows a file upload field on the student side.
-    solution_type: { type: String, enum: ["text", "file"], default: "text" },
+    // rich text editor, "file" shows a file upload field, "both" lets the
+    // student pick either on the student side.
+    solution_type: { type: String, enum: ["text", "file", "both"], default: "text" },
   },
   { timestamps: false },
 );
