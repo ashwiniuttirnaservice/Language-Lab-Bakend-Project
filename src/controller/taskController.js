@@ -18,6 +18,7 @@ const create = asyncHandler(async (req, res) => {
     type,
     link_url,
     text_content,
+    media_url: media_url_input,
     target,
     student_ids,
     due_date,
@@ -38,20 +39,26 @@ const create = asyncHandler(async (req, res) => {
     );
   }
 
-  // Media-bearing types need an uploaded file; link/text carry their content
-  // directly in the request body instead.
+  // Media-bearing types need a file, either as a direct multipart upload
+  // (req.file, legacy `taskMedia` field) or already uploaded beforehand via
+  // the chunked-upload endpoints, with the resulting URL sent as media_url
+  // (the frontend's current flow — see taskApi.createTask's comment).
+  // link/text carry their content directly in the request body instead.
   const mediaTypes = ["audio", "video", "document"];
   let media_url;
   if (mediaTypes.includes(type)) {
-    if (!req.file) {
+    if (req.file) {
+      const uploaded = await uploadToAws({
+        file: req.file,
+        fileName: `task_${Date.now()}`,
+        folderName: "tasks",
+      });
+      media_url = uploaded?.cdnUrl || uploaded?.fullS3URL || "";
+    } else if (media_url_input) {
+      media_url = media_url_input;
+    } else {
       return sendError(res, 400, false, `A file upload is required for task type '${type}'.`);
     }
-    const uploaded = await uploadToAws({
-      file: req.file,
-      fileName: `task_${Date.now()}`,
-      folderName: "tasks",
-    });
-    media_url = uploaded?.cdnUrl || uploaded?.fullS3URL || "";
   }
 
   // Every id in student_ids must belong to this institute AND be enrolled in course_id.
@@ -122,6 +129,7 @@ const update = asyncHandler(async (req, res) => {
     type,
     link_url,
     text_content,
+    media_url: media_url_input,
     target,
     student_ids,
     due_date,
@@ -157,14 +165,21 @@ const update = asyncHandler(async (req, res) => {
   if (link_url !== undefined && nextType === "link") task.link_url = link_url;
   if (text_content !== undefined && nextType === "text") task.text_content = text_content;
 
+  // Same dual-path as create(): a direct multipart file (req.file, legacy)
+  // or a URL already uploaded via the chunked-upload endpoints beforehand
+  // (the frontend's current flow, sent as plain JSON media_url).
   const mediaTypes = ["audio", "video", "document"];
-  if (mediaTypes.includes(nextType) && req.file) {
-    const uploaded = await uploadToAws({
-      file: req.file,
-      fileName: `task_${Date.now()}`,
-      folderName: "tasks",
-    });
-    task.media_url = uploaded?.cdnUrl || uploaded?.fullS3URL || "";
+  if (mediaTypes.includes(nextType)) {
+    if (req.file) {
+      const uploaded = await uploadToAws({
+        file: req.file,
+        fileName: `task_${Date.now()}`,
+        folderName: "tasks",
+      });
+      task.media_url = uploaded?.cdnUrl || uploaded?.fullS3URL || "";
+    } else if (media_url_input !== undefined) {
+      task.media_url = media_url_input;
+    }
   }
 
   const nextTarget = target !== undefined ? target : task.target;

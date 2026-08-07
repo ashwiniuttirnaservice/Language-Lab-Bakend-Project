@@ -43,6 +43,12 @@ const createTaskSchema = Joi.object({
     then: Joi.required(),
     otherwise: Joi.optional().allow("", null),
   }),
+  // Kept optional (not `.when(...).required()`) because audio/video/document
+  // tasks can arrive via either path: a direct multipart `taskMedia` file
+  // (req.file, legacy) or this URL from the frontend's chunked-upload flow
+  // (uploaded separately via /upload/chunk/* beforehand) — the controller
+  // enforces that at least one of the two is present for media types.
+  media_url: Joi.string().uri().allow("", null),
   target: Joi.string().valid("all", "selected").default("all"),
   student_ids: Joi.alternatives().conditional("target", {
     is: "selected",
@@ -65,6 +71,9 @@ const updateTaskSchema = Joi.object({
   type: Joi.string().valid("audio", "video", "document", "link", "text"),
   link_url: Joi.string().uri().allow("", null),
   text_content: Joi.string().trim().allow("", null),
+  // See createTaskSchema's media_url comment — same dual-path (req.file or
+  // pre-uploaded URL) applies to updates.
+  media_url: Joi.string().uri().allow("", null),
   target: Joi.string().valid("all", "selected"),
   student_ids: Joi.array().items(objectId),
   due_date: Joi.date().iso(),
