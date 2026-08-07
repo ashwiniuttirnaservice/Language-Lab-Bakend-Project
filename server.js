@@ -35,6 +35,26 @@ if (process.env.NODE_ENV !== "production") {
 
 app.get("/", (req, res) => res.json({ message: "Language Lab API Running" }));
 
+// Serves locally-cached course videos (see instituteController.downloadCourseData
+// + service/videoDownloadService.js) so playback can happen from this
+// institute's own machine instead of streaming from AWS every time.
+//
+// helmet()'s default Cross-Origin-Resource-Policy: same-origin blocks a
+// <video>/<img> tag from loading this at all when the frontend runs on a
+// different origin (e.g. Next dev on :3000 fetching from the API on :5000)
+// — browsers enforce CORP independently of the Access-Control-Allow-Origin
+// CORS header, and curl/Postman never enforce it, so this fails silently
+// only in an actual browser <video> tag ("This video failed to load.").
+// Loosen it to cross-origin for just this static route.
+app.use(
+  "/media",
+  (req, res, next) => {
+    res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+    next();
+  },
+  express.static(path.join(__dirname, "uploads", "downloaded")),
+);
+
 app.use("/api", require("./src/index"));
 
 app.use(require("./src/middlewares/errorHandler"));

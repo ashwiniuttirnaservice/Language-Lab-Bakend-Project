@@ -35,6 +35,8 @@ const {
   getActiveStudentsCount,
   verifyByCode,
   downloadCourseData,
+  getCourseDownloadStatus,
+  getSyncKey,
   getCourseLastUpdated,
   sendOtp,
   verifyOtp,
@@ -108,6 +110,18 @@ router.get(
   protectInstitute,
   authorizeRoles("institute"),
   downloadCourseData,
+);
+router.get(
+  "/me/courses/:courseId/download-status",
+  protectInstitute,
+  authorizeRoles("institute"),
+  getCourseDownloadStatus,
+);
+router.get(
+  "/me/sync-key",
+  protectInstitute,
+  authorizeRoles("institute"),
+  getSyncKey,
 );
 router.get(
   "/me/courses/:courseId/last-updated",

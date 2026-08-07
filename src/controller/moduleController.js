@@ -7,6 +7,7 @@ const VocabularyModule = require("../models/VocabularyModule");
 const asyncHandler = require("../middlewares/asyncHandler");
 const { sendResponse, sendError } = require("../utils/apiResponse");
 const uploadToAws = require("../utils/awsUpload");
+const DownloadedAsset = require("../models/DownloadedAsset");
 
 const MODEL_MAP = {
   video: VideoModule,
@@ -39,6 +40,41 @@ const stripAnswers = (doc) => {
     ({ correct_answer, explanation, ...q }) => q,
   );
   return plain;
+};
+
+// Attaches each video module's locally-cached playback URL (see
+// instituteController.downloadCourseData + service/videoDownloadService.js)
+// so the student player can play from this institute's own server instead
+// of streaming from AWS whenever the file has already been downloaded.
+// No-op for anyone other than an authenticated student (editors/admins
+// previewing content have no institute to scope a local cache to).
+const attachLocalVideoUrls = async (videoDocs, req) => {
+  const instituteId = req.student?.institute_id;
+  if (!instituteId || !videoDocs.length) {
+    return videoDocs.map((doc) => (doc.toObject ? doc.toObject() : doc));
+  }
+
+  const assets = await DownloadedAsset.find({
+    institute_id: instituteId,
+    module_id: { $in: videoDocs.map((d) => d._id) },
+  })
+    .select("module_id status file_name")
+    .lean();
+  const assetByModuleId = new Map(assets.map((a) => [a.module_id.toString(), a]));
+
+  return videoDocs.map((doc) => {
+    const plain = doc.toObject ? doc.toObject() : doc;
+    const asset = assetByModuleId.get(plain._id.toString());
+    plain.video = {
+      ...plain.video,
+      download_status: asset?.status || "pending",
+      local_url:
+        asset?.status === "completed"
+          ? `/media/${instituteId}/${asset.file_name}`
+          : null,
+    };
+    return plain;
+  });
 };
 
 // POST /module/:type
@@ -117,8 +153,14 @@ const getBySubTopic = asyncHandler(async (req, res) => {
     .populate("sub_topic_id", "title")
     .sort({ order: 1 });
 
-  const data =
-    type === "exercise" && req.student ? modules.map(stripAnswers) : modules;
+  let data;
+  if (type === "exercise" && req.student) {
+    data = modules.map(stripAnswers);
+  } else if (type === "video") {
+    data = await attachLocalVideoUrls(modules, req);
+  } else {
+    data = modules;
+  }
 
   return sendResponse(
     res,
@@ -149,6 +191,11 @@ const getOne = asyncHandler(async (req, res) => {
       "Module fetched successfully.",
       stripAnswers(module),
     );
+  }
+
+  if (type === "video") {
+    const [decorated] = await attachLocalVideoUrls([module], req);
+    return sendResponse(res, 200, true, "Module fetched successfully.", decorated);
   }
 
   return sendResponse(res, 200, true, "Module fetched successfully.", module);

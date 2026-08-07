@@ -21,5 +21,6 @@ router.use("/activity", require("./routes/activityRoutes"));
 router.use("/progress", require("./routes/progressRoutes"));
 router.use("/attendance", require("./routes/attendanceRoutes"));
 router.use("/ai", require("./routes/aiRoutes"));
+router.use("/sync", require("./routes/syncRoutes"));
 
 module.exports = router;

@@ -22,6 +22,10 @@ const asyncHandler = require("../middlewares/asyncHandler");
 const { sendResponse, sendError } = require("../utils/apiResponse");
 const uploadToAws = require("../utils/awsUpload");
 const emailService = require("../service/emailService");
+const DownloadedAsset = require("../models/DownloadedAsset");
+const { queueVideoDownloads } = require("../service/videoDownloadService");
+const { isSyncEnabled, syncCourseFromMaster, syncInstituteFromMaster } = require("../service/masterSyncService");
+const logger = require("../utils/logger");
 
 // POST /institute
 const create = asyncHandler(async (req, res) => {
@@ -88,6 +92,10 @@ const create = asyncHandler(async (req, res) => {
     course_id: courseIds,
     role: "institute",
     created_by: req.admin._id,
+    // Issued upfront so it's ready whenever this institute sets up their
+    // own local backend+database and needs to sync course content down
+    // (see getSyncKey below + routes/syncRoutes.js) — never a DB credential.
+    sync_api_key: crypto.randomBytes(24).toString("hex"),
   });
 
   // Awaited (not thrown) — sendMail() never rejects, so this can't block/fail creation,
@@ -414,7 +422,23 @@ const login = asyncHandler(async (req, res) => {
   const jwt = require("jsonwebtoken");
   const { email, password } = req.body;
 
-  const institute = await Institute.findOne({ email }).select("+password");
+  let institute = await Institute.findOne({ email }).select("+password");
+
+  // First-ever local login on a standalone deployment: no local Institute
+  // row exists yet for this email. Mirror it down from master (see
+  // syncInstituteFromMaster's comment) and retry once — every later login
+  // finds the now-local row and never takes this path again. A wrong
+  // password still fails normally below; this only ever creates/refreshes
+  // the row, it doesn't grant access by itself.
+  if (!institute && isSyncEnabled()) {
+    try {
+      await syncInstituteFromMaster();
+      institute = await Institute.findOne({ email }).select("+password");
+    } catch (error) {
+      logger.error(`Institute sync-on-login failed for ${email}: ${error.message}`);
+    }
+  }
+
   if (!institute) return sendError(res, 401, false, "Invalid email or password.");
 
   const isMatch = await bcrypt.compare(password, institute.password);
@@ -830,6 +854,27 @@ const getPublic = asyncHandler(async (req, res) => {
   });
 });
 
+// GET /institute/me/sync-key
+// Reveals this institute's own master-sync API key (crypto.randomBytes hex
+// string, generated at Institute creation) so an admin can copy it into
+// their own local backend's .env (SYNC_API_KEY) — see routes/syncRoutes.js
+// for where it's actually used. Institutes created before this field
+// existed won't have one yet, so it's lazily generated here on first call
+// instead of requiring a separate backfill script.
+const getSyncKey = asyncHandler(async (req, res) => {
+  let institute = await Institute.findById(req.institute._id).select("+sync_api_key");
+  if (!institute) return sendError(res, 404, false, "Institute not found.");
+
+  if (!institute.sync_api_key) {
+    institute.sync_api_key = crypto.randomBytes(24).toString("hex");
+    await institute.save();
+  }
+
+  return sendResponse(res, 200, true, "Sync key fetched.", {
+    sync_api_key: institute.sync_api_key,
+  });
+});
+
 // GET /institute/me/courses/:courseId/download
 // Pulls the full content (topics -> sub-topics -> modules) for ONE course
 // assigned to this institute — only the course whose Download button was
@@ -839,6 +884,19 @@ const downloadCourseData = asyncHandler(async (req, res) => {
 
   if (!mongoose.Types.ObjectId.isValid(courseId)) {
     return sendError(res, 404, false, "Course not found.");
+  }
+
+  // On a standalone local-database deployment, pull this course's content
+  // down from the master server first and mirror it into our own DB — the
+  // rest of this function then reads it back out exactly like the single
+  // shared-database deployment does, unchanged below this block.
+  if (isSyncEnabled()) {
+    try {
+      await syncCourseFromMaster(courseId, req.institute._id);
+    } catch (error) {
+      const message = error.response?.data?.message || error.message;
+      return sendError(res, 502, false, `Failed to sync course from master: ${message}`);
+    }
   }
 
   const institute = await Institute.findById(req.institute._id).select("course_id");
@@ -901,6 +959,33 @@ const downloadCourseData = asyncHandler(async (req, res) => {
     if (st) st.modules.push(m);
   }
 
+  // Local video caching: kick off (or resume) background downloads of every
+  // video module's file to this server's disk so playback can later be
+  // served from /media instead of streaming from AWS each time. This does
+  // NOT block the response below — see queueVideoDownloads() for why.
+  queueVideoDownloads(req.institute._id, course._id, video);
+
+  const videoAssets = await DownloadedAsset.find({
+    institute_id: req.institute._id,
+    module_id: { $in: video.map((v) => v._id) },
+  }).lean();
+  const assetByModuleId = new Map(videoAssets.map((a) => [a.module_id.toString(), a]));
+
+  for (const m of modules) {
+    if (m.module_type !== "video") continue;
+    const asset = assetByModuleId.get(m._id.toString());
+    m.video = {
+      ...m.video,
+      download_status: asset?.status || "pending",
+      // Local, offline-playable URL once the file has actually landed on
+      // disk; frontend falls back to the AWS `url` until this is set.
+      local_url:
+        asset?.status === "completed"
+          ? `/media/${req.institute._id}/${asset.file_name}`
+          : null,
+    };
+  }
+
   const topicsWithContent = topics.map((t) => ({
     ...t,
     sub_topics: subTopicsByTopic.get(t._id.toString()) || [],
@@ -919,10 +1004,58 @@ const downloadCourseData = asyncHandler(async (req, res) => {
     { $addToSet: { downloaded_course_ids: course._id } },
   );
 
+  // Snapshot this course's current topic_ids — students only see topics that
+  // were part of the course as of this pull. A topic added to the course
+  // later stays hidden from students until the institute downloads/updates
+  // this course again, refreshing the snapshot below.
+  await Institute.updateOne(
+    { _id: req.institute._id },
+    { $pull: { downloaded_topic_snapshot: { course_id: course._id } } },
+  );
+  await Institute.updateOne(
+    { _id: req.institute._id },
+    { $push: { downloaded_topic_snapshot: { course_id: course._id, topic_ids: topicIds } } },
+  );
+
   return sendResponse(res, 200, true, "Course data pulled successfully.", {
     course,
     topics: topicsWithContent,
     last_updated: lastUpdated,
+  });
+});
+
+// GET /institute/me/courses/:courseId/download-status
+// Lightweight poll target for the frontend while background video downloads
+// (kicked off by downloadCourseData above) are still running — lets the UI
+// show "downloading video X of Y" and switch each player over to the local
+// /media URL the moment its file lands on disk, without re-pulling the
+// whole course payload.
+const getCourseDownloadStatus = asyncHandler(async (req, res) => {
+  const { courseId } = req.params;
+  if (!mongoose.Types.ObjectId.isValid(courseId)) {
+    return sendError(res, 404, false, "Course not found.");
+  }
+
+  const assets = await DownloadedAsset.find({
+    institute_id: req.institute._id,
+    course_id: courseId,
+  })
+    .select("module_id title status size_bytes downloaded_bytes total_bytes error_message updatedAt")
+    .lean();
+
+  const summary = assets.reduce(
+    (acc, a) => {
+      acc[a.status] = (acc[a.status] || 0) + 1;
+      return acc;
+    },
+    { pending: 0, downloading: 0, completed: 0, failed: 0 },
+  );
+
+  return sendResponse(res, 200, true, "Download status fetched.", {
+    total: assets.length,
+    summary,
+    all_completed: assets.length > 0 && summary.completed === assets.length,
+    assets,
   });
 });
 
@@ -1000,16 +1133,39 @@ const getCourseLastUpdated = asyncHandler(async (req, res) => {
 
 // GET /institute/verify-code/:code
 // No auth — confirms an institute_code exists before the login step.
+// On a standalone local deployment, the very first thing an institute does
+// is this /config flow — institute_code lookup, then OTP, then finally
+// email/password login. All three steps below query by institute_code
+// against whatever DB this backend is connected to, which is empty on a
+// fresh local deployment (nobody's logged in yet to trigger the sync
+// login() does). This mirrors the record down from master (same mechanism
+// login() uses on its own not-found path) the first time any of them can't
+// find it locally, so the whole /config → OTP → login sequence works
+// before any separate manual sync step — exactly like it already does,
+// unmodified, on the shared-database deployment.
+const findInstituteByCodeWithSync = async (code) => {
+  let institute = await Institute.findOne({ institute_code: code, is_active: true });
+  if (!institute && isSyncEnabled()) {
+    try {
+      await syncInstituteFromMaster();
+      institute = await Institute.findOne({ institute_code: code, is_active: true });
+    } catch (error) {
+      logger.error(`Institute sync-on-config failed for code ${code}: ${error.message}`);
+    }
+  }
+  return institute;
+};
+
 const verifyByCode = asyncHandler(async (req, res) => {
   const code = req.params.code?.trim().toUpperCase();
 
-  const institute = await Institute.findOne(
-    { institute_code: code, is_active: true },
+  const found = await findInstituteByCodeWithSync(code);
+  if (!found) return sendError(res, 404, false, "Invalid institute code.");
+
+  const institute = await Institute.findById(
+    found._id,
     "institute_name institute_code logo",
   ).lean();
-
-  if (!institute) return sendError(res, 404, false, "Invalid institute code.");
-
   return sendResponse(res, 200, true, "Institute code verified.", institute);
 });
 
@@ -1019,10 +1175,7 @@ const verifyByCode = asyncHandler(async (req, res) => {
 const sendOtp = asyncHandler(async (req, res) => {
   const code = req.body.institute_code?.trim().toUpperCase();
 
-  const institute = await Institute.findOne({
-    institute_code: code,
-    is_active: true,
-  });
+  const institute = await findInstituteByCodeWithSync(code);
   if (!institute) return sendError(res, 404, false, "Invalid institute code.");
 
   const otp = crypto.randomInt(100000, 1000000).toString();
@@ -1044,10 +1197,10 @@ const verifyOtp = asyncHandler(async (req, res) => {
   const code = req.body.institute_code?.trim().toUpperCase();
   const { otp } = req.body;
 
-  const institute = await Institute.findOne(
-    { institute_code: code, is_active: true },
-  ).select("+otp_code +otp_expires_at");
-  if (!institute) return sendError(res, 404, false, "Invalid institute code.");
+  const found = await findInstituteByCodeWithSync(code);
+  if (!found) return sendError(res, 404, false, "Invalid institute code.");
+
+  const institute = await Institute.findById(found._id).select("+otp_code +otp_expires_at");
 
   if (
     !institute.otp_code ||
@@ -1097,6 +1250,8 @@ module.exports = {
   logout,
   verifyByCode,
   downloadCourseData,
+  getCourseDownloadStatus,
+  getSyncKey,
   getCourseLastUpdated,
   sendOtp,
   verifyOtp,

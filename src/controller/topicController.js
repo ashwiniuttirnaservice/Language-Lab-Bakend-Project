@@ -56,28 +56,56 @@ const getAll = asyncHandler(async (req, res) => {
     }
 
     const Institute = require("../models/Institute");
-    const institute = await Institute.findById(req.student.institute_id).select("course_id");
+    const institute = await Institute.findById(req.student.institute_id).select(
+      "downloaded_course_ids downloaded_topic_snapshot",
+    );
 
-    // Restrict to the requested course, or fall back to all institute courses
+    // Only courses the institute has actually pulled ("Download"/"Update Data")
+    // are visible to students — same gating rule used by practical/task/student
+    // controllers. Restrict to the requested course, or fall back to all
+    // downloaded institute courses.
     const courseIds = course_id
-      ? institute?.course_id?.filter((id) => id.toString() === course_id)
-      : institute?.course_id;
+      ? institute?.downloaded_course_ids?.filter((id) => id.toString() === course_id)
+      : institute?.downloaded_course_ids;
 
     if (courseIds?.length) {
-      const courses = await Course.find(
-        { _id: { $in: courseIds }, is_active: true },
-        { topic_ids: 1 },
-      ).lean();
+      const snapshotByCourse = new Map(
+        (institute?.downloaded_topic_snapshot || []).map((s) => [
+          s.course_id.toString(),
+          s.topic_ids,
+        ]),
+      );
 
-      // Flatten all topic_ids arrays + deduplicate via Set
+      // Courses downloaded before the snapshot existed have no entry yet —
+      // fall back to their live topic_ids so those institutes aren't broken
+      // until they download/update that course again.
+      const coursesNeedingLiveLookup = courseIds.filter(
+        (id) => !snapshotByCourse.has(id.toString()),
+      );
+      const liveTopicIdsByCourse = new Map();
+      if (coursesNeedingLiveLookup.length) {
+        const courses = await Course.find(
+          { _id: { $in: coursesNeedingLiveLookup }, is_active: true },
+          { topic_ids: 1 },
+        ).lean();
+        for (const c of courses) {
+          liveTopicIdsByCourse.set(c._id.toString(), c.topic_ids);
+        }
+      }
+
+      // Only topics captured in the snapshot at the time of the last
+      // download/update are visible — a topic added to the course afterward
+      // stays hidden until the institute pulls that course again.
       const seen = new Set();
       const allTopicIds = [];
-      for (const c of courses) {
-        for (const id of c.topic_ids) {
-          const key = id.toString();
-          if (!seen.has(key)) {
-            seen.add(key);
-            allTopicIds.push(new Types.ObjectId(key));
+      for (const courseId of courseIds) {
+        const key = courseId.toString();
+        const ids = snapshotByCourse.get(key) || liveTopicIdsByCourse.get(key) || [];
+        for (const id of ids) {
+          const idKey = id.toString();
+          if (!seen.has(idKey)) {
+            seen.add(idKey);
+            allTopicIds.push(new Types.ObjectId(idKey));
           }
         }
       }
