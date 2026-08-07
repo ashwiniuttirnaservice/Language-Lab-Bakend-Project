@@ -33,7 +33,9 @@ const validateSchema =
       return sendError(
         res,
         422,
+        false,
         "Validation failed. Please check the errors.",
+        null,
         errors,
       );
     }

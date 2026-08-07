@@ -6,7 +6,7 @@ const questionSchema = Joi.object({
   question_text: Joi.string().trim().min(1).required(),
   answer_key_html: Joi.string().trim().allow("", null),
   answer_lines: Joi.number().integer().min(1).max(50).default(5),
-  solution_type: Joi.string().valid("text", "file").default("text"),
+  solution_type: Joi.string().valid("text", "file", "both").default("text"),
 });
 
 const createPracticalSchema = Joi.object({
@@ -41,7 +41,7 @@ const answerSchema = Joi.object({
 // are covered by the multipart attachment instead (checked in the controller,
 // since the file itself never reaches Joi).
 const submitPracticalSchema = Joi.object({
-  solution_type: Joi.string().valid("text", "file").default("text"),
+  solution_type: Joi.string().valid("text", "file", "both").default("text"),
   answers: Joi.array()
     .items(answerSchema)
     .when("solution_type", {
