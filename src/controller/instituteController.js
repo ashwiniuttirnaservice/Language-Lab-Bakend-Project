@@ -23,8 +23,20 @@ const { sendResponse, sendError } = require("../utils/apiResponse");
 const uploadToAws = require("../utils/awsUpload");
 const emailService = require("../service/emailService");
 const DownloadedAsset = require("../models/DownloadedAsset");
-const { queueVideoDownloads } = require("../service/videoDownloadService");
-const { isSyncEnabled, syncCourseFromMaster, syncInstituteFromMaster } = require("../service/masterSyncService");
+const {
+  queueVideoDownloads,
+  queueAudioDownloads,
+  queueVocabularyAssetDownloads,
+  queueSingleAssetDownload,
+} = require("../service/videoDownloadService");
+const { deterministicObjectId } = require("../utils/deterministicId");
+const {
+  isSyncEnabled,
+  syncCourseFromMaster,
+  syncCourseFromPublicDownload,
+  syncInstituteFromMaster,
+  syncInstituteFromPublicLogin,
+} = require("../service/masterSyncService");
 const logger = require("../utils/logger");
 
 // POST /institute
@@ -425,17 +437,30 @@ const login = asyncHandler(async (req, res) => {
   let institute = await Institute.findOne({ email }).select("+password");
 
   // First-ever local login on a standalone deployment: no local Institute
-  // row exists yet for this email. Mirror it down from master (see
-  // syncInstituteFromMaster's comment) and retry once — every later login
-  // finds the now-local row and never takes this path again. A wrong
-  // password still fails normally below; this only ever creates/refreshes
-  // the row, it doesn't grant access by itself.
+  // row exists yet for this email. Mirror it down from master and retry
+  // once — every later login finds the now-local row and never takes this
+  // path again. A wrong password still fails normally below; this only ever
+  // creates/refreshes the row, it doesn't grant access by itself.
   if (!institute && isSyncEnabled()) {
     try {
+      // Preferred path (see syncInstituteFromMaster's comment) — needs
+      // GET /api/sync/institute + SYNC_API_KEY on the master deployment.
       await syncInstituteFromMaster();
       institute = await Institute.findOne({ email }).select("+password");
     } catch (error) {
       logger.error(`Institute sync-on-login failed for ${email}: ${error.message}`);
+    }
+
+    // Fallback — the master this backend points at doesn't have the sync
+    // route deployed (404) on some deployments. Verify+mirror via the
+    // always-available public login instead (see its comment).
+    if (!institute) {
+      try {
+        await syncInstituteFromPublicLogin(email, password);
+        institute = await Institute.findOne({ email }).select("+password");
+      } catch (error) {
+        logger.error(`Institute sync-on-login (public fallback) failed for ${email}: ${error.message}`);
+      }
     }
   }
 
@@ -506,6 +531,20 @@ const getMe = asyncHandler(async (req, res) => {
     },
     { $project: { password: 0 } },
   ]);
+
+  if (institute?.logo) {
+    // Cached opportunistically by downloadCourseData (queueSingleAssetDownload)
+    // once a course download has run — falls back to null (AWS `logo` used
+    // instead) until that file has actually landed on disk.
+    const logoAsset = await DownloadedAsset.findOne({
+      institute_id: req.institute._id,
+      module_id: deterministicObjectId(`institute:${req.institute._id}:logo`),
+    }).lean();
+    institute.local_logo_url =
+      logoAsset?.status === "completed"
+        ? `/media/${req.institute._id}/${logoAsset.file_name}`
+        : null;
+  }
 
   return sendResponse(res, 200, true, "Profile fetched successfully.", institute);
 });
@@ -892,10 +931,26 @@ const downloadCourseData = asyncHandler(async (req, res) => {
   // shared-database deployment does, unchanged below this block.
   if (isSyncEnabled()) {
     try {
+      // Preferred path — needs GET /api/sync/course/:id + SYNC_API_KEY on
+      // the master deployment.
       await syncCourseFromMaster(courseId, req.institute._id);
     } catch (error) {
-      const message = error.response?.data?.message || error.message;
-      return sendError(res, 502, false, `Failed to sync course from master: ${message}`);
+      // Fallback — that route isn't deployed on some master deployments
+      // (404). Pull the same content via the always-available public
+      // download endpoint instead, using the master-issued institute token
+      // the frontend forwards in x-master-token (see courseApi.downloadCourse).
+      const masterToken = req.headers["x-master-token"];
+      if (!masterToken) {
+        const message = error.response?.data?.message || error.message;
+        return sendError(res, 502, false, `Failed to sync course from master: ${message}`);
+      }
+
+      try {
+        await syncCourseFromPublicDownload(courseId, req.institute._id, masterToken);
+      } catch (fallbackError) {
+        const message = fallbackError.response?.data?.message || fallbackError.message;
+        return sendError(res, 502, false, `Failed to sync course from master: ${message}`);
+      }
     }
   }
 
@@ -959,32 +1014,103 @@ const downloadCourseData = asyncHandler(async (req, res) => {
     if (st) st.modules.push(m);
   }
 
-  // Local video caching: kick off (or resume) background downloads of every
-  // video module's file to this server's disk so playback can later be
-  // served from /media instead of streaming from AWS each time. This does
-  // NOT block the response below — see queueVideoDownloads() for why.
+  // Local media caching: kick off (or resume) background downloads of every
+  // video/audio module's file, every vocabulary word's audio/image, and this
+  // course's thumbnail to this server's disk, so the whole course is usable
+  // with no internet once downloaded — not just video/audio playback.
+  // Doesn't block the response below — see queueVideoDownloads() for why.
   queueVideoDownloads(req.institute._id, course._id, video);
+  queueAudioDownloads(req.institute._id, course._id, audio);
+  queueVocabularyAssetDownloads(req.institute._id, course._id, vocabulary);
+  queueSingleAssetDownload(req.institute._id, course._id, {
+    key: `course:${course._id}:thumbnail`,
+    module_type: "course_thumbnail",
+    title: `${course.course_name} (thumbnail)`,
+    source_url: course.thumbnail_url,
+  });
+  // Opportunistic — this institute's logo isn't part of this response, but
+  // GET /institute/me returns it (see getMe below), so cache it here too
+  // while we already have the institute's own record in hand.
+  queueSingleAssetDownload(req.institute._id, course._id, {
+    key: `institute:${req.institute._id}:logo`,
+    module_type: "institute_logo",
+    title: "Institute logo",
+    source_url: req.institute.logo,
+  });
 
-  const videoAssets = await DownloadedAsset.find({
+  // Every id that might have a DownloadedAsset row: real module ids
+  // (video/audio) plus the synthetic ones for vocab words + the thumbnail
+  // (same derivation queueVocabularyAssetDownloads/queueSingleAssetDownload
+  // used above, so lookups line up with whatever got queued).
+  const wordAssetIdByWord = new Map(); // "moduleId:index:audio|image" -> id
+  for (const m of vocabulary) {
+    (m.words || []).forEach((word, index) => {
+      if (word.audio_url) {
+        wordAssetIdByWord.set(
+          `${m._id}:${index}:audio`,
+          deterministicObjectId(`${m._id}:word:${index}:audio`),
+        );
+      }
+      if (word.image_url) {
+        wordAssetIdByWord.set(
+          `${m._id}:${index}:image`,
+          deterministicObjectId(`${m._id}:word:${index}:image`),
+        );
+      }
+    });
+  }
+  const thumbnailAssetId = deterministicObjectId(`course:${course._id}:thumbnail`);
+
+  const allAssetIds = [
+    ...video.map((m) => m._id),
+    ...audio.map((m) => m._id),
+    ...wordAssetIdByWord.values(),
+    thumbnailAssetId,
+  ];
+
+  const mediaAssets = await DownloadedAsset.find({
     institute_id: req.institute._id,
-    module_id: { $in: video.map((v) => v._id) },
+    module_id: { $in: allAssetIds },
   }).lean();
-  const assetByModuleId = new Map(videoAssets.map((a) => [a.module_id.toString(), a]));
+  const assetByModuleId = new Map(mediaAssets.map((a) => [a.module_id.toString(), a]));
+
+  const localUrlIfReady = (asset) =>
+    asset?.status === "completed" ? `/media/${req.institute._id}/${asset.file_name}` : null;
 
   for (const m of modules) {
-    if (m.module_type !== "video") continue;
+    if (m.module_type !== "video" && m.module_type !== "audio") continue;
     const asset = assetByModuleId.get(m._id.toString());
-    m.video = {
-      ...m.video,
+    m[m.module_type] = {
+      ...m[m.module_type],
       download_status: asset?.status || "pending",
       // Local, offline-playable URL once the file has actually landed on
       // disk; frontend falls back to the AWS `url` until this is set.
-      local_url:
-        asset?.status === "completed"
-          ? `/media/${req.institute._id}/${asset.file_name}`
-          : null,
+      local_url: localUrlIfReady(asset),
     };
   }
+
+  // Same treatment for each vocabulary word's audio/image.
+  for (const m of vocabulary) {
+    m.words = (m.words || []).map((word, index) => {
+      const audioAsset = assetByModuleId.get(
+        wordAssetIdByWord.get(`${m._id}:${index}:audio`)?.toString(),
+      );
+      const imageAsset = assetByModuleId.get(
+        wordAssetIdByWord.get(`${m._id}:${index}:image`)?.toString(),
+      );
+      return {
+        ...word,
+        audio_download_status: word.audio_url ? audioAsset?.status || "pending" : undefined,
+        local_audio_url: word.audio_url ? localUrlIfReady(audioAsset) : undefined,
+        image_download_status: word.image_url ? imageAsset?.status || "pending" : undefined,
+        local_image_url: word.image_url ? localUrlIfReady(imageAsset) : undefined,
+      };
+    });
+  }
+
+  // And the course thumbnail.
+  const thumbnailAsset = assetByModuleId.get(thumbnailAssetId.toString());
+  course.local_thumbnail_url = localUrlIfReady(thumbnailAsset);
 
   const topicsWithContent = topics.map((t) => ({
     ...t,

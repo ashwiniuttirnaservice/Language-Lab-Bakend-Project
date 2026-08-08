@@ -62,7 +62,11 @@ const {
 // Parse address from JSON string → object (sent as multipart field)
 const parseAddress = (req, _res, next) => {
   if (req.body?.address && typeof req.body.address === "string") {
-    try { req.body.address = JSON.parse(req.body.address); } catch { /* leave as-is */ }
+    try {
+      req.body.address = JSON.parse(req.body.address);
+    } catch {
+      /* leave as-is */
+    }
   }
   next();
 };
@@ -97,14 +101,24 @@ router.get(
 // ── Institute (self) ──────────────────────────────────────────────────────────
 router.post("/logout", protectInstitute, authorizeRoles("institute"), logout);
 router.get("/me", protectInstitute, authorizeRoles("institute"), getMe);
-router.get("/me/dashboard", protectInstitute, authorizeRoles("institute"), getDashboard);
+router.get(
+  "/me/dashboard",
+  protectInstitute,
+  authorizeRoles("institute"),
+  getDashboard,
+);
 router.get(
   "/active-students-count",
   protectInstitute,
   authorizeRoles("institute"),
   getActiveStudentsCount,
 );
-router.get("/me/courses", protectInstitute, authorizeRoles("institute"), getPurchasedCourses);
+router.get(
+  "/me/courses",
+  protectInstitute,
+  authorizeRoles("institute"),
+  getPurchasedCourses,
+);
 router.get(
   "/me/courses/:courseId/download",
   protectInstitute,

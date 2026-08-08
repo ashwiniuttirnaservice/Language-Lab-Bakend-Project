@@ -1,4 +1,5 @@
 const axios = require("axios");
+const bcrypt = require("bcryptjs");
 
 const Course = require("../models/Course");
 const Topic = require("../models/Topic");
@@ -9,6 +10,7 @@ const VideoModule = require("../models/VideoModule");
 const TextModule = require("../models/TextModule");
 const ExerciseModule = require("../models/ExerciseModule");
 const Institute = require("../models/Institute");
+const License = require("../models/License");
 const logger = require("../utils/logger");
 
 const MODULE_MODEL_BY_TYPE = {
@@ -103,4 +105,155 @@ async function syncInstituteFromMaster() {
   return _id;
 }
 
-module.exports = { isSyncEnabled, syncCourseFromMaster, syncInstituteFromMaster };
+// Fallback for syncInstituteFromMaster() above — that one depends on
+// GET /api/sync/institute + SYNC_API_KEY, which isn't available on every
+// master deployment. This instead calls the ALWAYS-available public
+// POST /api/institute/login with the same email/password the institute is
+// already logging in with here, which both verifies the credentials against
+// master AND issues a master token. That login response alone only carries a
+// handful of fields (name/code/email/logo/is_active) though — immediately
+// follow it up with GET /institute/me using that same token to pull the FULL
+// record (address, phone, website, course_id, license_ids, max_students, ...)
+// and mirror ALL of it locally. The password itself is never returned by
+// either endpoint (by design), so it's hashed fresh right here from the
+// plaintext password already in hand — equally secure, just a locally-made
+// hash instead of a copy of master's.
+async function syncInstituteFromPublicLogin(email, password) {
+  const loginResponse = await axios.post(
+    `${process.env.MASTER_API_URL}/api/institute/login`,
+    { email, password },
+  );
+  const { token: masterToken, institute: loginInstitute } = loginResponse.data.data;
+
+  let fullInstitute = loginInstitute;
+  try {
+    const meResponse = await axios.get(`${process.env.MASTER_API_URL}/api/institute/me`, {
+      headers: { Authorization: `Bearer ${masterToken}` },
+    });
+    fullInstitute = meResponse.data.data;
+  } catch (error) {
+    // Falls back to the minimal login payload above — still enough to log
+    // in locally, just missing the extra fields /me would have added.
+    logger.error(`Institute /me fetch failed during sync for ${email}: ${error.message}`);
+  }
+
+  const instituteId = fullInstitute._id || fullInstitute.id;
+  const hashedPassword = await bcrypt.hash(password, 12);
+
+  // Strip aggregation-only/derived fields (license, editors, courses — added
+  // by master's getMe lookups, not real Institute columns) and anything that
+  // must come from THIS sync call rather than be copied verbatim (password,
+  // _id/id, __v, timestamps, and the institute's own OTP state — copying a
+  // stale otp_code/otp_expires_at down from master could otherwise collide
+  // with this institute's separate local OTP flow).
+  const {
+    _id, id, password: _password, license, editors, courses,
+    __v, createdAt, updatedAt, otp_code, otp_expires_at,
+    ...rest
+  } = fullInstitute;
+
+  await Institute.findOneAndUpdate(
+    { _id: instituteId },
+    {
+      $set: {
+        ...rest,
+        password: hashedPassword,
+        role: "institute",
+      },
+    },
+    { upsert: true, setDefaultsOnInsert: true },
+  );
+
+  // Also mirror this institute's licenses — without at least one active
+  // License row locally, getPublicList() (student-login's "select license
+  // code" dropdown) filters this institute out entirely, even once it has a
+  // valid Institute row and downloaded courses. Best-effort: a failure here
+  // shouldn't break institute login, just leave licenses to sync next time.
+  try {
+    await syncLicensesFromMaster(instituteId, masterToken);
+  } catch (error) {
+    logger.error(`License sync failed during institute sync for ${email}: ${error.message}`);
+  }
+
+  logger.info(`Synced institute ${instituteId} (${email}) from master via public login + /me.`);
+  return instituteId;
+}
+
+// Pulls every license this institute owns from master's protected
+// GET /institute/me/licenses (the same route the local backend's own
+// licenseApi.getInstituteLicenses would eventually hit once it has data) and
+// mirrors each one into local Mongo, keyed by master's _id. Called from
+// syncInstituteFromPublicLogin, reusing the master token obtained there.
+async function syncLicensesFromMaster(instituteId, masterToken) {
+  const response = await axios.get(`${process.env.MASTER_API_URL}/api/institute/me/licenses`, {
+    headers: { Authorization: `Bearer ${masterToken}` },
+  });
+  const { licenses } = response.data.data;
+
+  await Promise.all(licenses.map((l) => upsertById(License, l)));
+
+  logger.info(`Synced ${licenses.length} license(s) for institute ${instituteId} from master.`);
+}
+
+// Fallback for syncCourseFromMaster() above — that one depends on
+// GET /api/sync/course/:id + SYNC_API_KEY, which isn't available on every
+// master deployment. This instead calls the ALWAYS-available (auth-protected)
+// public GET /api/institute/me/courses/:courseId/download, using the SAME
+// master-issued institute token the frontend already holds from its own
+// direct master login (forwarded here via the x-master-token header — see
+// courseApi.downloadCourse + instituteController.downloadCourseData). That
+// response is the exact same course/topics/sub_topics/modules tree, just
+// nested instead of split into flat arrays, so it's flattened here before
+// mirroring into local Mongo. Once mirrored, the rest of downloadCourseData
+// (video caching to local disk, etc.) runs unchanged, reading these rows back
+// out of the local DB exactly like the SYNC_API_KEY path would have left them.
+async function syncCourseFromPublicDownload(courseId, instituteId, masterToken) {
+  const response = await axios.get(
+    `${process.env.MASTER_API_URL}/api/institute/me/courses/${courseId}/download`,
+    { headers: { Authorization: `Bearer ${masterToken}` } },
+  );
+  const { course, topics } = response.data.data;
+
+  await upsertById(Course, course);
+
+  await Promise.all(
+    topics.map((t) => {
+      const { sub_topics, ...topicDoc } = t;
+      return upsertById(Topic, topicDoc);
+    }),
+  );
+
+  const subTopics = topics.flatMap((t) => t.sub_topics || []);
+  await Promise.all(
+    subTopics.map((st) => {
+      const { modules, ...subTopicDoc } = st;
+      return upsertById(SubTopic, subTopicDoc);
+    }),
+  );
+
+  const modules = subTopics.flatMap((st) => st.modules || []);
+  await Promise.all(
+    modules.map((m) => {
+      const Model = MODULE_MODEL_BY_TYPE[m.module_type];
+      return Model ? upsertById(Model, m) : Promise.resolve();
+    }),
+  );
+
+  await Institute.updateOne(
+    { _id: instituteId },
+    { $addToSet: { course_id: courseId } },
+  );
+
+  logger.info(
+    `Synced course ${courseId} from master via public download: ${topics.length} topics, ${subTopics.length} sub-topics, ${modules.length} modules.`,
+  );
+}
+
+module.exports = {
+  isSyncEnabled,
+  syncCourseFromMaster,
+  syncCourseFromPublicDownload,
+  syncInstituteFromMaster,
+  syncInstituteFromPublicLogin,
+  syncLicensesFromMaster,
+};

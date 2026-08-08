@@ -34,7 +34,9 @@ const {
   resetSeats,
 } = require("../controller/licenseBatchController");
 
-const { getAllForAdmin: getAllStudents } = require("../controller/studentController");
+const {
+  getAllForAdmin: getAllStudents,
+} = require("../controller/studentController");
 
 const protectSuperAdmin = require("../middlewares/protectSuperAdmin");
 const authorizeRoles = require("../middlewares/authorizeRoles");
@@ -42,7 +44,12 @@ const authorizeRoles = require("../middlewares/authorizeRoles");
 const guard = [protectSuperAdmin, authorizeRoles("super_admin")];
 
 // ── Public ────────────────────────────────────────────────────────────────────
-router.post("/register", upload.single("profileImage"), validateSchema(registerSchema), register);
+router.post(
+  "/register",
+  upload.single("profileImage"),
+  validateSchema(registerSchema),
+  register,
+);
 router.post("/login", validateSchema(loginSchema), login);
 
 // ── Dashboard ─────────────────────────────────────────────────────────────────
@@ -50,16 +57,27 @@ router.get("/dashboard", ...guard, getDashboard);
 
 // ── SuperAdmin profile ────────────────────────────────────────────────────────
 router.get("/profile", ...guard, getProfile);
-router.put("/profile", ...guard, upload.single("profileImage"), validateSchema(updateProfileSchema), updateProfile);
-router.put("/change-password", ...guard, validateSchema(changePasswordSchema), changePassword);
+router.put(
+  "/profile",
+  ...guard,
+  upload.single("profileImage"),
+  validateSchema(updateProfileSchema),
+  updateProfile,
+);
+router.put(
+  "/change-password",
+  ...guard,
+  validateSchema(changePasswordSchema),
+  changePassword,
+);
 
 // ── Course management ─────────────────────────────────────────────────────────
 router.post("/course", ...guard, createCourse);
-router.get("/course", ...guard, getAllCourses);
-router.get("/course/:id/module-count", ...guard, getCourseModuleCount);
-router.get("/course/:id", ...guard, getOneCourse);
-router.put("/course/:id", ...guard, updateCourse);
-router.delete("/course/:id", ...guard, removeCourse);
+router.get("/course", getAllCourses);
+router.get("/course/:id/module-count", getCourseModuleCount);
+router.get("/course/:id", getOneCourse);
+router.put("/course/:id", updateCourse);
+router.delete("/course/:id", removeCourse);
 
 // ── Students (super admin view) ───────────────────────────────────────────────
 router.get("/students", ...guard, getAllStudents);
