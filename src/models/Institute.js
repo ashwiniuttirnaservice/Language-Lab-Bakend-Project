@@ -28,10 +28,12 @@ const InstituteSchema = new Schema(
     website: { type: String },
 
     // ── Created by super admin ─────────────────────
+    // Not required: a locally-mirrored institute (synced down from master on
+    // first login on a standalone deployment — see masterSyncService) never
+    // had a superadmin create it on THIS database, so it has no value here.
     created_by: {
       type: Schema.Types.ObjectId,
       ref: "SuperAdmin",
-      required: true,
     },
 
     // ── Courses selected at creation (multiple allowed) ───

@@ -20,10 +20,9 @@ if (!fs.existsSync(logsDir)) {
   fs.mkdirSync(logsDir, { recursive: true });
 }
 
-const accessLogStream = fs.createWriteStream(
-  path.join(logsDir, "access.log"),
-  { flags: "a" },
-);
+const accessLogStream = fs.createWriteStream(path.join(logsDir, "access.log"), {
+  flags: "a",
+});
 
 app.use(express.json());
 app.use(cors());
