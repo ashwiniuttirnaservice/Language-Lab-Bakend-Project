@@ -929,6 +929,14 @@ const downloadCourseData = asyncHandler(async (req, res) => {
   // down from the master server first and mirror it into our own DB — the
   // rest of this function then reads it back out exactly like the single
   // shared-database deployment does, unchanged below this block.
+  //
+  // Sync is best-effort, NOT required to succeed: if this course was already
+  // downloaded before and is sitting in the local DB, a sync failure (most
+  // commonly: no internet at all right now — ENOTFOUND/ECONNREFUSED/timeout
+  // reaching master) must NOT block serving that already-cached copy. That's
+  // the entire point of "offline server" — only a course that has NEVER been
+  // successfully pulled before has nothing to fall back to, and THAT case
+  // still needs to fail loudly instead of silently returning empty content.
   if (isSyncEnabled()) {
     try {
       // Preferred path — needs GET /api/sync/course/:id + SYNC_API_KEY on
@@ -940,16 +948,26 @@ const downloadCourseData = asyncHandler(async (req, res) => {
       // download endpoint instead, using the master-issued institute token
       // the frontend forwards in x-master-token (see courseApi.downloadCourse).
       const masterToken = req.headers["x-master-token"];
-      if (!masterToken) {
-        const message = error.response?.data?.message || error.message;
-        return sendError(res, 502, false, `Failed to sync course from master: ${message}`);
+      let synced = false;
+
+      if (masterToken) {
+        try {
+          await syncCourseFromPublicDownload(courseId, req.institute._id, masterToken);
+          synced = true;
+        } catch (fallbackError) {
+          logger.error(`Course sync fallback failed for ${courseId}: ${fallbackError.message}`);
+        }
       }
 
-      try {
-        await syncCourseFromPublicDownload(courseId, req.institute._id, masterToken);
-      } catch (fallbackError) {
-        const message = fallbackError.response?.data?.message || fallbackError.message;
-        return sendError(res, 502, false, `Failed to sync course from master: ${message}`);
+      if (!synced) {
+        const alreadyLocal = await Course.exists({ _id: courseId });
+        if (!alreadyLocal) {
+          const message = error.response?.data?.message || error.message;
+          return sendError(res, 502, false, `Failed to sync course from master: ${message}`);
+        }
+        logger.error(
+          `Course sync failed for ${courseId}, serving already-cached local copy: ${error.message}`,
+        );
       }
     }
   }

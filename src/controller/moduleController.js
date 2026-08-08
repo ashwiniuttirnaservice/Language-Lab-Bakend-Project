@@ -42,31 +42,31 @@ const stripAnswers = (doc) => {
   return plain;
 };
 
-// Attaches each video module's locally-cached playback URL (see
+// Attaches each video/audio module's locally-cached playback URL (see
 // instituteController.downloadCourseData + service/videoDownloadService.js)
 // so the student player can play from this institute's own server instead
 // of streaming from AWS whenever the file has already been downloaded.
 // No-op for anyone other than an authenticated student (editors/admins
 // previewing content have no institute to scope a local cache to).
-const attachLocalVideoUrls = async (videoDocs, req) => {
+const attachLocalMediaUrls = async (mediaDocs, req, mediaType) => {
   const instituteId = req.student?.institute_id;
-  if (!instituteId || !videoDocs.length) {
-    return videoDocs.map((doc) => (doc.toObject ? doc.toObject() : doc));
+  if (!instituteId || !mediaDocs.length) {
+    return mediaDocs.map((doc) => (doc.toObject ? doc.toObject() : doc));
   }
 
   const assets = await DownloadedAsset.find({
     institute_id: instituteId,
-    module_id: { $in: videoDocs.map((d) => d._id) },
+    module_id: { $in: mediaDocs.map((d) => d._id) },
   })
     .select("module_id status file_name")
     .lean();
   const assetByModuleId = new Map(assets.map((a) => [a.module_id.toString(), a]));
 
-  return videoDocs.map((doc) => {
+  return mediaDocs.map((doc) => {
     const plain = doc.toObject ? doc.toObject() : doc;
     const asset = assetByModuleId.get(plain._id.toString());
-    plain.video = {
-      ...plain.video,
+    plain[mediaType] = {
+      ...plain[mediaType],
       download_status: asset?.status || "pending",
       local_url:
         asset?.status === "completed"
@@ -156,8 +156,8 @@ const getBySubTopic = asyncHandler(async (req, res) => {
   let data;
   if (type === "exercise" && req.student) {
     data = modules.map(stripAnswers);
-  } else if (type === "video") {
-    data = await attachLocalVideoUrls(modules, req);
+  } else if (type === "video" || type === "audio") {
+    data = await attachLocalMediaUrls(modules, req, type);
   } else {
     data = modules;
   }
@@ -193,8 +193,8 @@ const getOne = asyncHandler(async (req, res) => {
     );
   }
 
-  if (type === "video") {
-    const [decorated] = await attachLocalVideoUrls([module], req);
+  if (type === "video" || type === "audio") {
+    const [decorated] = await attachLocalMediaUrls([module], req, type);
     return sendResponse(res, 200, true, "Module fetched successfully.", decorated);
   }
 
