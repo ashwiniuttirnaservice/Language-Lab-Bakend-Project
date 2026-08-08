@@ -45,14 +45,21 @@ app.get("/", (req, res) => res.json({ message: "Language Lab API Running" }));
 // CORS header, and curl/Postman never enforce it, so this fails silently
 // only in an actual browser <video> tag ("This video failed to load.").
 // Loosen it to cross-origin for just this static route.
-app.use(
-  "/media",
-  (req, res, next) => {
-    res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
-    next();
-  },
-  express.static(path.join(__dirname, "uploads", "downloaded")),
-);
+const serveDownloadedMedia = (req, res, next) => {
+  res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+  next();
+};
+const downloadedMediaDir = express.static(path.join(__dirname, "uploads", "downloaded"));
+
+app.use("/media", serveDownloadedMedia, downloadedMediaDir);
+
+// Same files, also mounted under /api/media — some deployments (nginx etc.)
+// sit behind a reverse proxy that only forwards paths starting with /api, so
+// a bare "/media/..." URL never reaches this server in that setup (404s at
+// the proxy itself, not from here). utils/media.js's getMediaBaseUrl() builds
+// local_url URLs by appending straight onto NEXT_PUBLIC_API_URL (which
+// already ends in /api), so this is the route that actually gets hit.
+app.use("/api/media", serveDownloadedMedia, downloadedMediaDir);
 
 app.use("/api", require("./src/index"));
 
