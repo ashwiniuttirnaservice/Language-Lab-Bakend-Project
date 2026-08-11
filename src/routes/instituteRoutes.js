@@ -44,6 +44,8 @@ const {
 
 const { getByInstitute } = require("../controller/licenseBatchController");
 
+const studentLearningAccessRoutes = require("./studentLearningAccessRoutes");
+
 const {
   getTopicDetails,
   getExerciseReport,
@@ -201,6 +203,9 @@ router.get(
   authorizeRoles("institute"),
   getStudentActivityHistory,
 );
+
+// ── Institute: Student Learning Access (course/topic/subtopic → segment+year) ─
+router.use("/student-learning-access", studentLearningAccessRoutes);
 
 // ── Institute: activity log (Student Activity Log) ────────────────────────────
 router.get(

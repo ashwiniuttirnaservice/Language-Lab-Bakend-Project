@@ -8,6 +8,8 @@ const asyncHandler = require("../middlewares/asyncHandler");
 const { sendResponse, sendError } = require("../utils/apiResponse");
 const uploadToAws = require("../utils/awsUpload");
 const DownloadedAsset = require("../models/DownloadedAsset");
+const SubTopic = require("../models/SubTopic");
+const { getGrantedIds } = require("../utils/studentAccess");
 
 const MODEL_MAP = {
   video: VideoModule,
@@ -167,7 +169,29 @@ const getBySubTopic = asyncHandler(async (req, res) => {
     );
 
   const filter = { is_active: true };
-  if (subtopic_id) filter.sub_topic_id = subtopic_id;
+  if (subtopic_id) {
+    filter.sub_topic_id = subtopic_id;
+
+    // Student Learning Access: mirrors subTopicController.getByTopic — a
+    // student can't bypass the (already-filtered) subtopic list by fetching
+    // modules for a subtopic_id directly that their department+batch was
+    // never granted.
+    if (req.student) {
+      const subtopic = await SubTopic.findById(subtopic_id).select("topic_id");
+      if (!subtopic) return sendError(res, 404, false, "SubTopic not found.");
+
+      const grantedSubtopicIds = await getGrantedIds({
+        instituteId: req.student.institute_id,
+        segment: req.student.segment,
+        year: req.student.year,
+        scopeMatch: { topic_id: subtopic.topic_id },
+        idField: "subtopic_ids",
+      });
+      if (grantedSubtopicIds && !grantedSubtopicIds.has(subtopic_id)) {
+        return sendError(res, 403, false, "You do not have access to this subtopic.");
+      }
+    }
+  }
   if (content_module_id) {
     filter.content_module_id = content_module_id;
   } else if (type === "exercise" && req.student) {
