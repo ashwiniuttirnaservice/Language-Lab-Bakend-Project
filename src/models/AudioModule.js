@@ -66,6 +66,7 @@ const AudioModuleSchema = new Schema(
       duration_sec: { type: Number },
       type: { type: String, enum: ["mp3", "wav", "ogg"], default: "mp3" },
       size_mb: { type: Number },
+      thumbnail_url: { type: String },
       transcript: { type: String },
       language: { type: String },
       speaker_name: { type: String },

@@ -37,6 +37,8 @@ const getFolderPath = (fieldname) => {
       return "uploads/modules/videos";
     case "audioFile":
       return "uploads/modules/audio";
+    case "thumbnailFile":
+      return "uploads/modules/thumbnails";
     default:
       throw new Error(`Invalid file field: ${fieldname}`);
   }
