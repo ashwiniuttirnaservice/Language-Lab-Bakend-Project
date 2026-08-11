@@ -22,6 +22,30 @@ const FOLDER_MAP = {
   audio: "modules/audio",
 };
 
+// Which multer field carries the main media file for each type — matches
+// the fieldnames wired up in routes/moduleRoutes.js + middlewares/uploads.js.
+const MEDIA_FIELD_MAP = {
+  video: "videoFile",
+  audio: "audioFile",
+};
+
+const THUMBNAIL_FOLDER = "modules/thumbnails";
+
+// Uploads the thumbnail image (if one was sent) to AWS and returns its URL,
+// or null if no thumbnail file is present on this request.
+const uploadThumbnailIfPresent = async (req, type) => {
+  const thumbnailFile = req.files?.thumbnailFile?.[0];
+  if (!thumbnailFile) return null;
+
+  const uploaded = await uploadToAws({
+    file: thumbnailFile,
+    fileName: `${type}_thumbnail_${Date.now()}`,
+    folderName: THUMBNAIL_FOLDER,
+  });
+  fs.unlink(thumbnailFile.path, () => {});
+  return uploaded?.cdnUrl || uploaded?.fullS3URL || "";
+};
+
 const parseJsonField = (value) => {
   if (typeof value === "string") {
     try {
@@ -92,20 +116,25 @@ const create = asyncHandler(async (req, res) => {
     },
   );
 
-  // Handle file upload for video/audio
-  if (req.file && FOLDER_MAP[type]) {
-    const uploaded = await uploadToAws({
-      file: req.file,
-      fileName: `${type}_${Date.now()}`,
-      folderName: FOLDER_MAP[type],
-    });
-    fs.unlink(req.file.path, () => {});
-    const url = uploaded?.cdnUrl || uploaded?.fullS3URL || "";
+  // Handle file upload for video/audio (usually already uploaded via the
+  // chunked flow by this point, so this is a fallback path) plus the
+  // optional thumbnail image, which always rides along as a plain file.
+  if (FOLDER_MAP[type]) {
+    const mediaFile = req.files?.[MEDIA_FIELD_MAP[type]]?.[0];
+    if (mediaFile) {
+      const uploaded = await uploadToAws({
+        file: mediaFile,
+        fileName: `${type}_${Date.now()}`,
+        folderName: FOLDER_MAP[type],
+      });
+      fs.unlink(mediaFile.path, () => {});
+      const url = uploaded?.cdnUrl || uploaded?.fullS3URL || "";
+      data[type] = { ...(data[type] || {}), url };
+    }
 
-    if (type === "video") {
-      data.video = { ...(data.video || {}), url };
-    } else if (type === "audio") {
-      data.audio = { ...(data.audio || {}), url };
+    const thumbnailUrl = await uploadThumbnailIfPresent(req, type);
+    if (thumbnailUrl) {
+      data[type] = { ...(data[type] || {}), thumbnail_url: thumbnailUrl };
     }
   }
 
@@ -219,19 +248,29 @@ const update = asyncHandler(async (req, res) => {
     },
   );
 
-  if (req.file && FOLDER_MAP[type]) {
-    const uploaded = await uploadToAws({
-      file: req.file,
-      fileName: `${type}_${Date.now()}`,
-      folderName: FOLDER_MAP[type],
-    });
-    fs.unlink(req.file.path, () => {});
-    const url = uploaded?.cdnUrl || uploaded?.fullS3URL || "";
+  // Merge onto the existing video/audio subdocument first, so fields the
+  // client didn't resend (e.g. thumbnail_url from an earlier upload,
+  // size_mb) survive instead of being wiped by Object.assign below.
+  if (data.video) data.video = { ...(module.video?.toObject?.() || {}), ...data.video };
+  if (data.audio) data.audio = { ...(module.audio?.toObject?.() || {}), ...data.audio };
 
-    if (type === "video")
-      data.video = { ...(module.video?.toObject?.() || {}), url };
-    if (type === "audio")
-      data.audio = { ...(module.audio?.toObject?.() || {}), url };
+  if (FOLDER_MAP[type]) {
+    const mediaFile = req.files?.[MEDIA_FIELD_MAP[type]]?.[0];
+    if (mediaFile) {
+      const uploaded = await uploadToAws({
+        file: mediaFile,
+        fileName: `${type}_${Date.now()}`,
+        folderName: FOLDER_MAP[type],
+      });
+      fs.unlink(mediaFile.path, () => {});
+      const url = uploaded?.cdnUrl || uploaded?.fullS3URL || "";
+      data[type] = { ...(module[type]?.toObject?.() || {}), ...(data[type] || {}), url };
+    }
+
+    const thumbnailUrl = await uploadThumbnailIfPresent(req, type);
+    if (thumbnailUrl) {
+      data[type] = { ...(module[type]?.toObject?.() || {}), ...(data[type] || {}), thumbnail_url: thumbnailUrl };
+    }
   }
 
   Object.assign(module, data);
