@@ -49,7 +49,9 @@ const serveDownloadedMedia = (req, res, next) => {
   res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
   next();
 };
-const downloadedMediaDir = express.static(path.join(__dirname, "uploads", "downloaded"));
+const downloadedMediaDir = express.static(
+  path.join(__dirname, "uploads", "downloaded"),
+);
 
 app.use("/media", serveDownloadedMedia, downloadedMediaDir);
 
@@ -66,4 +68,4 @@ app.use("/api", require("./src/index"));
 app.use(require("./src/middlewares/errorHandler"));
 
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => console.log(`Server running on   port ${PORT}`));
