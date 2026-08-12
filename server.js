@@ -32,7 +32,9 @@ if (process.env.NODE_ENV !== "production") {
   app.use(morgan("dev"));
 }
 
-app.get("/", (req, res) => res.json({ message: "Language Lab API Running" }));
+app.get("/", (req, res) =>
+  res.json({ message: "Language Lab API Running......" }),
+);
 
 // Serves locally-cached course videos (see instituteController.downloadCourseData
 // + service/videoDownloadService.js) so playback can happen from this
