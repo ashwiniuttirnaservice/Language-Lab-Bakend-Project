@@ -362,6 +362,73 @@ const updateSubmission = asyncHandler(async (req, res) => {
   return sendResponse(res, 200, true, "Submission updated successfully.", submission);
 });
 
+// PUT /task/:id/assign
+// Adds one department (segment) + batch (year) pair to this task's
+// assigned_batches — same append-not-replace flow as
+// practicalController.assign, so multiple pairs can be assigned to the same
+// task over separate calls. Silently no-ops on an already-assigned pair.
+const assign = asyncHandler(async (req, res) => {
+  const task = await Task.findOne({
+    _id: req.params.id,
+    institute_id: req.institute._id,
+    is_deleted: false,
+  });
+  if (!task) return sendError(res, 404, false, "Task not found.");
+
+  const { segment, year } = req.body;
+
+  const alreadyAssigned = task.assigned_batches.some(
+    (b) => b.segment === segment && b.year === year,
+  );
+  if (!alreadyAssigned) {
+    task.assigned_batches.push({ segment, year });
+    await task.save();
+  }
+
+  return sendResponse(res, 200, true, "Task assigned successfully.", task);
+});
+
+// GET /task/departments
+// Same live segment/year + studentCount aggregation as
+// practicalController.getDepartments — backs the Department/Batch selects
+// on the Assign Task form.
+const getDepartments = asyncHandler(async (req, res) => {
+  const groups = await Student.aggregate([
+    {
+      $match: {
+        institute_id: new Types.ObjectId(req.institute._id),
+        status: "active",
+        segment: { $nin: [null, ""] },
+        year: { $ne: null },
+      },
+    },
+    {
+      $group: {
+        _id: { segment: "$segment", year: "$year" },
+        studentCount: { $sum: 1 },
+      },
+    },
+    { $sort: { "_id.segment": 1, "_id.year": 1 } },
+  ]);
+
+  const byDepartment = new Map();
+  for (const g of groups) {
+    const { segment, year } = g._id;
+    if (!byDepartment.has(segment)) {
+      byDepartment.set(segment, { name: segment, batches: [] });
+    }
+    byDepartment.get(segment).batches.push({ year, studentCount: g.studentCount });
+  }
+
+  return sendResponse(
+    res,
+    200,
+    true,
+    "Departments and batches fetched.",
+    Array.from(byDepartment.values()),
+  );
+});
+
 // DELETE /task/:id
 const remove = asyncHandler(async (req, res) => {
   const task = await Task.findOneAndUpdate(
@@ -375,12 +442,23 @@ const remove = asyncHandler(async (req, res) => {
 });
 
 // ── Student Panel ────────────────────────────────────────────────────────
+// A student must satisfy the existing target rule (all-enrolled or
+// specifically selected) AND, if assigned_batches is non-empty, be in one
+// of those department/batch pairs too — see the field comment on the Task
+// model. Empty assigned_batches imposes no extra restriction.
 function isAssignedToStudent(task, student) {
-  return task.target === "selected"
-    ? task.student_ids.some((id) => id.toString() === student._id.toString())
-    : student.purchased_courses.some(
-        (c) => c.toString() === (task.course_id._id || task.course_id).toString(),
-      );
+  const baseAssigned =
+    task.target === "selected"
+      ? task.student_ids.some((id) => id.toString() === student._id.toString())
+      : student.purchased_courses.some(
+          (c) => c.toString() === (task.course_id._id || task.course_id).toString(),
+        );
+  if (!baseAssigned) return false;
+
+  if (!task.assigned_batches?.length) return true;
+  return task.assigned_batches.some(
+    (b) => b.segment === student.segment && b.year === student.year,
+  );
 }
 
 // GET /task/mine?courseId=&topicId=
@@ -398,11 +476,21 @@ const getMine = asyncHandler(async (req, res) => {
   if (req.query.courseId) match.course_id = new Types.ObjectId(req.query.courseId);
   if (req.query.topicId) match.topic_id = new Types.ObjectId(req.query.topicId);
 
-  const tasks = await Task.find(match)
+  let tasks = await Task.find(match)
     .populate("course_id", "course_name course_code")
     .populate("topic_id", "title")
     .sort({ createdAt: -1 })
     .lean();
+
+  // The $or above already covers target "all"/"selected" — assigned_batches
+  // is an extra department/batch narrowing on top, same rule as
+  // isAssignedToStudent, applied here since it can't be expressed in the
+  // match stage without knowing the student's segment/year up front.
+  tasks = tasks.filter(
+    (t) =>
+      !t.assigned_batches?.length ||
+      t.assigned_batches.some((b) => b.segment === student.segment && b.year === student.year),
+  );
 
   const submissions = await TaskSubmission.find({
     student_id: student._id,
@@ -541,6 +629,8 @@ module.exports = {
   getSubmissions,
   updateSubmission,
   remove,
+  assign,
+  getDepartments,
   getMine,
   getOneMine,
   submitMine,

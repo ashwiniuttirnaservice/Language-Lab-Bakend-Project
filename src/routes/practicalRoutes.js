@@ -12,6 +12,7 @@ const {
   updatePracticalSchema,
   submitPracticalSchema,
   gradeSubmissionSchema,
+  assignPracticalSchema,
 } = require("../validation/practicalValidation");
 
 const {
@@ -20,6 +21,8 @@ const {
   getOne,
   update,
   remove,
+  assign,
+  getDepartments,
   getSubmissions,
   gradeSubmission,
   getMine,
@@ -78,6 +81,9 @@ router.post(
   validateSchema(createPracticalSchema),
   create,
 );
+// Registered before "/:id" so the literal path "departments" never gets
+// swallowed by the "/:id" param route below.
+router.get("/departments", getDepartments);
 router.get("/", getAll);
 router.get("/:id", getOne);
 router.put(
@@ -87,6 +93,7 @@ router.put(
   validateSchema(updatePracticalSchema),
   update,
 );
+router.put("/:id/assign", validateSchema(assignPracticalSchema), assign);
 router.get("/:id/submissions", getSubmissions);
 router.put(
   "/:id/submissions/:submissionId",

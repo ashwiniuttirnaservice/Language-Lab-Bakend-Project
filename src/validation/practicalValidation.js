@@ -56,9 +56,17 @@ const gradeSubmissionSchema = Joi.object({
   feedback: Joi.string().trim().allow("", null),
 }).min(1);
 
+// Same "department"/"batch" vocabulary as studentLearningAccessValidation —
+// segment = department, year = batch (year of study, not calendar year).
+const assignPracticalSchema = Joi.object({
+  segment: Joi.string().trim().min(1).max(120).required(),
+  year: Joi.number().integer().min(1).max(6).required(),
+});
+
 module.exports = {
   createPracticalSchema,
   updatePracticalSchema,
   submitPracticalSchema,
   gradeSubmissionSchema,
+  assignPracticalSchema,
 };
