@@ -103,9 +103,17 @@ const submitTaskSchema = Joi.object({
   answers: Joi.array().items(taskAnswerSchema),
 });
 
+// Same "department"/"batch" vocabulary as practicalValidation's
+// assignPracticalSchema — segment = department, year = batch.
+const assignTaskSchema = Joi.object({
+  segment: Joi.string().trim().min(1).max(120).required(),
+  year: Joi.number().integer().min(1).max(6).required(),
+});
+
 module.exports = {
   createTaskSchema,
   updateTaskSchema,
   updateSubmissionSchema,
   submitTaskSchema,
+  assignTaskSchema,
 };

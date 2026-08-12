@@ -12,6 +12,7 @@ const {
   updateTaskSchema,
   updateSubmissionSchema,
   submitTaskSchema,
+  assignTaskSchema,
 } = require("../validation/taskValidation");
 
 const {
@@ -22,6 +23,8 @@ const {
   getSubmissions,
   updateSubmission,
   remove,
+  assign,
+  getDepartments,
   getMine,
   getOneMine,
   submitMine,
@@ -75,6 +78,9 @@ router.post(
   validateSchema(createTaskSchema),
   create,
 );
+// Registered before "/:id" so the literal path "departments" never gets
+// swallowed by the "/:id" param route below.
+router.get("/departments", getDepartments);
 router.get("/", getAll);
 router.get("/:id", getOne);
 router.put(
@@ -84,6 +90,7 @@ router.put(
   validateSchema(updateTaskSchema),
   update,
 );
+router.put("/:id/assign", validateSchema(assignTaskSchema), assign);
 router.get("/:id/submissions", getSubmissions);
 router.put(
   "/:id/submissions/:submissionId",
