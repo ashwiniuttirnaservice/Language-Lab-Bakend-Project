@@ -47,6 +47,23 @@ const PracticalSchema = new Schema(
     attachment_url: { type: String },
     attachment_type: { type: String, enum: ["image", "pdf"] },
 
+    // Department (Student.segment) + batch (Student.year) pairs this manual
+    // has been assigned to — same "department"/"batch" vocabulary as
+    // StudentLearningAccess. An empty array means "visible to every student
+    // enrolled in course_id" (backward compatible with manuals created
+    // before assignment existed); a non-empty array restricts getMine to
+    // only those segment/year pairs.
+    assigned_batches: {
+      type: [
+        {
+          segment: { type: String, required: true, trim: true },
+          year: { type: Number, required: true, min: 1, max: 6 },
+          _id: false,
+        },
+      ],
+      default: [],
+    },
+
     created_by: {
       type: Schema.Types.ObjectId,
       ref: "Institute",

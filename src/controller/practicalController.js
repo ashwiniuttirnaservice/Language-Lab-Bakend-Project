@@ -2,6 +2,7 @@ const { Types } = require("mongoose");
 
 const Practical = require("../models/Practical");
 const PracticalSubmission = require("../models/PracticalSubmission");
+const Student = require("../models/Student");
 const asyncHandler = require("../middlewares/asyncHandler");
 const { sendResponse, sendError } = require("../utils/apiResponse");
 const uploadToAws = require("../utils/awsUpload");
@@ -193,6 +194,75 @@ const update = asyncHandler(async (req, res) => {
   return sendResponse(res, 200, true, "Practical question updated successfully.", practical);
 });
 
+// PUT /practical/:id/assign
+// Adds one department (segment) + batch (year) pair to this manual's
+// assigned_batches — same "assign to department/batch" flow as
+// studentLearningAccessController's create, but appending rather than
+// replacing, so multiple department/batch pairs can be assigned to the same
+// manual over separate calls. Silently no-ops on an already-assigned pair.
+const assign = asyncHandler(async (req, res) => {
+  const practical = await Practical.findOne({
+    _id: req.params.id,
+    institute_id: req.institute._id,
+    is_deleted: false,
+  });
+  if (!practical) return sendError(res, 404, false, "Practical question not found.");
+
+  const { segment, year } = req.body;
+
+  const alreadyAssigned = practical.assigned_batches.some(
+    (b) => b.segment === segment && b.year === year,
+  );
+  if (!alreadyAssigned) {
+    practical.assigned_batches.push({ segment, year });
+    await practical.save();
+  }
+
+  return sendResponse(res, 200, true, "Practical manual assigned successfully.", practical);
+});
+
+// GET /practical/departments
+// Distinct department (segment) + batch (year) combinations actually present
+// among this institute's students, with live student counts — same shape
+// and query as studentLearningAccessController.getDepartments, backing the
+// Department/Batch selects on the Assign Practical Manual form.
+const getDepartments = asyncHandler(async (req, res) => {
+  const groups = await Student.aggregate([
+    {
+      $match: {
+        institute_id: new Types.ObjectId(req.institute._id),
+        status: "active",
+        segment: { $nin: [null, ""] },
+        year: { $ne: null },
+      },
+    },
+    {
+      $group: {
+        _id: { segment: "$segment", year: "$year" },
+        studentCount: { $sum: 1 },
+      },
+    },
+    { $sort: { "_id.segment": 1, "_id.year": 1 } },
+  ]);
+
+  const byDepartment = new Map();
+  for (const g of groups) {
+    const { segment, year } = g._id;
+    if (!byDepartment.has(segment)) {
+      byDepartment.set(segment, { name: segment, batches: [] });
+    }
+    byDepartment.get(segment).batches.push({ year, studentCount: g.studentCount });
+  }
+
+  return sendResponse(
+    res,
+    200,
+    true,
+    "Departments and batches fetched.",
+    Array.from(byDepartment.values()),
+  );
+});
+
 // GET /practical/:id/submissions
 const getSubmissions = asyncHandler(async (req, res) => {
   const practical = await Practical.findOne({
@@ -267,12 +337,22 @@ const getMine = asyncHandler(async (req, res) => {
   if (req.query.courseId) match.course_id = new Types.ObjectId(req.query.courseId);
   if (req.query.topicId) match.topic_id = new Types.ObjectId(req.query.topicId);
 
-  const practicals = await Practical.find(match)
+  let practicals = await Practical.find(match)
     .select(STUDENT_HIDDEN_FIELDS)
     .populate("course_id", "course_name course_code")
     .populate("topic_id", "title")
     .sort({ createdAt: -1 })
     .lean();
+
+  // A manual with no assigned_batches is visible to every enrolled student
+  // (backward compatible with manuals created before assignment existed);
+  // once assigned, it's only visible to students in one of its assigned
+  // department/batch pairs.
+  practicals = practicals.filter(
+    (p) =>
+      !p.assigned_batches?.length ||
+      p.assigned_batches.some((b) => b.segment === student.segment && b.year === student.year),
+  );
 
   const submissions = await PracticalSubmission.find({
     student_id: student._id,
@@ -318,6 +398,15 @@ const getOneMine = asyncHandler(async (req, res) => {
   );
   if (!enrolled) {
     return sendError(res, 403, false, "You are not enrolled in this practical's course.");
+  }
+
+  const assignedElsewhere =
+    practical.assigned_batches?.length &&
+    !practical.assigned_batches.some(
+      (b) => b.segment === student.segment && b.year === student.year,
+    );
+  if (assignedElsewhere) {
+    return sendError(res, 403, false, "This practical is not assigned to your department/batch.");
   }
 
   const submission = await PracticalSubmission.findOne({
@@ -435,6 +524,8 @@ module.exports = {
   getOne,
   update,
   remove,
+  assign,
+  getDepartments,
   getSubmissions,
   gradeSubmission,
   getMine,

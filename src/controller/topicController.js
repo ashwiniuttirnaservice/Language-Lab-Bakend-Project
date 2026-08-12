@@ -5,6 +5,7 @@ const Course = require("../models/Course");
 const asyncHandler = require("../middlewares/asyncHandler");
 const { sendResponse, sendError } = require("../utils/apiResponse");
 const Student = require("../models/Student");
+const { getGrantedIds } = require("../utils/studentAccess");
 const MODULE_COLLECTION_MAP = {
   video: "videomodules",
   audio: "audiomodules",
@@ -100,7 +101,23 @@ const getAll = asyncHandler(async (req, res) => {
       const allTopicIds = [];
       for (const courseId of courseIds) {
         const key = courseId.toString();
-        const ids = snapshotByCourse.get(key) || liveTopicIdsByCourse.get(key) || [];
+        let ids = snapshotByCourse.get(key) || liveTopicIdsByCourse.get(key) || [];
+
+        // Student Learning Access: if the institute configured any
+        // department+batch access grants for THIS course, only the topics
+        // granted to this student's own segment+year survive. Courses the
+        // institute never configured this for behave exactly as before.
+        const grantedTopicIds = await getGrantedIds({
+          instituteId: req.student.institute_id,
+          segment: req.student.segment,
+          year: req.student.year,
+          scopeMatch: { course_id: courseId },
+          idField: "topic_id",
+        });
+        if (grantedTopicIds) {
+          ids = ids.filter((id) => grantedTopicIds.has(id.toString()));
+        }
+
         for (const id of ids) {
           const idKey = id.toString();
           if (!seen.has(idKey)) {
@@ -170,6 +187,25 @@ const getAll = asyncHandler(async (req, res) => {
 
 // GET /topic/:id
 const getOne = asyncHandler(async (req, res) => {
+  const subtopicsMatch = { is_active: true };
+
+  // Student Learning Access — see subTopicController.getByTopic for the
+  // same rule. This is the route the student dashboard's topic detail page
+  // actually calls (topicApi.getTopicById), so the restriction has to live
+  // here too, not just on the standalone /subtopic/topic/:id route.
+  if (req.student) {
+    const grantedSubtopicIds = await getGrantedIds({
+      instituteId: req.student.institute_id,
+      segment: req.student.segment,
+      year: req.student.year,
+      scopeMatch: { topic_id: req.params.id },
+      idField: "subtopic_ids",
+    });
+    if (grantedSubtopicIds) {
+      subtopicsMatch._id = { $in: [...grantedSubtopicIds].map((id) => new Types.ObjectId(id)) };
+    }
+  }
+
   const [topic] = await Topic.aggregate([
     { $match: { _id: new Types.ObjectId(req.params.id), is_active: true } },
     {
@@ -179,7 +215,7 @@ const getOne = asyncHandler(async (req, res) => {
         foreignField: "topic_id",
         as: "subtopics",
         pipeline: [
-          { $match: { is_active: true } },
+          { $match: subtopicsMatch },
           { $sort: { order: 1 } },
         ],
       },

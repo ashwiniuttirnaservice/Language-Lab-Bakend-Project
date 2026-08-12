@@ -65,6 +65,23 @@ const TaskSchema = new Schema(
     // Only populated when target === "selected".
     student_ids: [{ type: Schema.Types.ObjectId, ref: "Student" }],
 
+    // Department (Student.segment) + batch (Student.year) pairs this task
+    // has been narrowed to — same vocabulary/shape as Practical's
+    // assigned_batches. Layered ON TOP of target/student_ids rather than
+    // replacing it: a student must satisfy the existing target rule AND
+    // (if this array is non-empty) be in one of these department/batch
+    // pairs. Empty means no extra restriction — fully backward compatible.
+    assigned_batches: {
+      type: [
+        {
+          segment: { type: String, required: true, trim: true },
+          year: { type: Number, required: true, min: 1, max: 6 },
+          _id: false,
+        },
+      ],
+      default: [],
+    },
+
     due_date: { type: Date },
     status: {
       type: String,

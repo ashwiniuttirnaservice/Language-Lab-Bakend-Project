@@ -8,9 +8,22 @@ const authorizeRoles = require("../middlewares/authorizeRoles");
 const { create, getBySubTopic, getOne, update, remove } = require("../controller/moduleController");
 const { getCourseModuleCount } = require("../controller/courseController");
 
+// Video/audio itself normally arrives pre-uploaded (via the chunked upload
+// flow — see chunkUploadRoutes.js) with just its URL sent in the "video"/
+// "audio" JSON field. thumbnailFile is small enough to skip chunking and
+// ride along as a plain multipart file on the same create/update request,
+// so both types accept it here alongside their (now usually-empty) media field.
 const fileField = (type) => {
-  if (type === "video") return upload.single("videoFile");
-  if (type === "audio") return upload.single("audioFile");
+  if (type === "video")
+    return upload.fields([
+      { name: "videoFile", maxCount: 1 },
+      { name: "thumbnailFile", maxCount: 1 },
+    ]);
+  if (type === "audio")
+    return upload.fields([
+      { name: "audioFile", maxCount: 1 },
+      { name: "thumbnailFile", maxCount: 1 },
+    ]);
   return (req, res, next) => next();
 };
 

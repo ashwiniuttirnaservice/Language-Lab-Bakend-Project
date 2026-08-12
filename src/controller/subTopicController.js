@@ -3,6 +3,7 @@ const { Types } = require("mongoose");
 const SubTopic = require("../models/SubTopic");
 const asyncHandler = require("../middlewares/asyncHandler");
 const { sendResponse, sendError } = require("../utils/apiResponse");
+const { getGrantedIds } = require("../utils/studentAccess");
 
 // POST /subtopic
 const create = asyncHandler(async (req, res) => {
@@ -21,13 +22,33 @@ const create = asyncHandler(async (req, res) => {
 
 // GET /subtopic/topic/:topicId
 const getByTopic = asyncHandler(async (req, res) => {
+  const matchStage = {
+    topic_id: new Types.ObjectId(req.params.topicId),
+    is_active: true,
+  };
+
+  // Student Learning Access: if the institute configured any department+
+  // batch access grants for this topic, only the subtopics granted to this
+  // student's own segment+year survive. A topic the institute never
+  // configured this for behaves exactly as before (all its subtopics show).
+  if (req.student) {
+    const grantedSubtopicIds = await getGrantedIds({
+      instituteId: req.student.institute_id,
+      segment: req.student.segment,
+      year: req.student.year,
+      scopeMatch: { topic_id: req.params.topicId },
+      idField: "subtopic_ids",
+    });
+    if (grantedSubtopicIds) {
+      if (!grantedSubtopicIds.size) {
+        return sendResponse(res, 200, true, "SubTopics fetched successfully.", []);
+      }
+      matchStage._id = { $in: [...grantedSubtopicIds].map((id) => new Types.ObjectId(id)) };
+    }
+  }
+
   const subtopics = await SubTopic.aggregate([
-    {
-      $match: {
-        topic_id: new Types.ObjectId(req.params.topicId),
-        is_active: true,
-      },
-    },
+    { $match: matchStage },
     { $sort: { order: 1, createdAt: 1 } },
     {
       $lookup: {
