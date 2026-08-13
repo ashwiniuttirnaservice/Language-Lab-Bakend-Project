@@ -1158,7 +1158,15 @@ const downloadCourseData = asyncHandler(async (req, res) => {
   );
   await Institute.updateOne(
     { _id: req.institute._id },
-    { $push: { downloaded_topic_snapshot: { course_id: course._id, topic_ids: topicIds } } },
+    {
+      $push: {
+        downloaded_topic_snapshot: {
+          course_id: course._id,
+          topic_ids: topicIds,
+          last_updated: lastUpdated,
+        },
+      },
+    },
   );
 
   return sendResponse(res, 200, true, "Course data pulled successfully.", {
@@ -1272,6 +1280,84 @@ const getCourseLastUpdated = asyncHandler(async (req, res) => {
 
   return sendResponse(res, 200, true, "Last updated timestamp fetched.", {
     last_updated: lastUpdated,
+  });
+});
+
+// GET /institute/me/courses/:courseId/sync-status
+// Whether this course's content has changed since it was last downloaded —
+// entirely within THIS backend (no master server / dual-config needed), so
+// "Update Data" works the same on a plain single-server institute as it does
+// on a master+local sync deployment. Compares the live content timestamp
+// against the snapshot's `last_updated`, stamped at the moment of the last
+// successful download (see downloadCourseData above).
+const getCourseSyncStatus = asyncHandler(async (req, res) => {
+  const { courseId } = req.params;
+
+  if (!mongoose.Types.ObjectId.isValid(courseId)) {
+    return sendError(res, 404, false, "Course not found.");
+  }
+
+  const institute = await Institute.findById(req.institute._id).select(
+    "course_id downloaded_course_ids downloaded_topic_snapshot",
+  );
+  const isAssigned = institute.course_id.some((id) => id.toString() === courseId);
+  if (!isAssigned) {
+    return sendError(res, 403, false, "This course is not assigned to your institute.");
+  }
+
+  const isDownloaded = (institute.downloaded_course_ids || []).some(
+    (id) => id.toString() === courseId,
+  );
+  if (!isDownloaded) {
+    // Nothing pulled yet — not "stale", just not downloaded (Settings shows
+    // "Download", not "Update Data", for this case).
+    return sendResponse(res, 200, true, "Sync status fetched.", { is_stale: false, last_updated: null });
+  }
+
+  const course = await Course.findOne({ _id: courseId, is_active: true })
+    .select("topic_ids updatedAt")
+    .lean();
+  if (!course) return sendError(res, 404, false, "Course not found.");
+
+  const topics = await Topic.find({ _id: { $in: course.topic_ids }, is_active: true })
+    .select("updatedAt")
+    .lean();
+  const topicIds = topics.map((t) => t._id);
+
+  const subTopics = await SubTopic.find({ topic_id: { $in: topicIds }, is_active: true })
+    .select("updatedAt")
+    .lean();
+
+  const [vocabulary, audio, video, text, exercise] = await Promise.all([
+    VocabularyModule.find({ topic_id: { $in: topicIds }, is_active: true }).select("updatedAt").lean(),
+    AudioModule.find({ topic_id: { $in: topicIds }, is_active: true }).select("updatedAt").lean(),
+    VideoModule.find({ topic_id: { $in: topicIds }, is_active: true }).select("updatedAt").lean(),
+    TextModule.find({ topic_id: { $in: topicIds }, is_active: true }).select("updatedAt").lean(),
+    ExerciseModule.find({ topic_id: { $in: topicIds }, is_active: true }).select("updatedAt").lean(),
+  ]);
+  const modules = [...vocabulary, ...audio, ...video, ...text, ...exercise];
+
+  const liveUpdated = latestTimestamp([
+    course.updatedAt,
+    ...topics.map((t) => t.updatedAt),
+    ...subTopics.map((s) => s.updatedAt),
+    ...modules.map((m) => m.updatedAt),
+  ]);
+
+  const snapshot = (institute.downloaded_topic_snapshot || []).find(
+    (s) => s.course_id.toString() === courseId,
+  );
+
+  // No stored timestamp (pulled before this field existed) — don't falsely
+  // flag stale; the institute just needs one more download to start tracking.
+  const isStale =
+    !!snapshot?.last_updated &&
+    !!liveUpdated &&
+    new Date(liveUpdated).getTime() > new Date(snapshot.last_updated).getTime();
+
+  return sendResponse(res, 200, true, "Sync status fetched.", {
+    is_stale: isStale,
+    last_updated: liveUpdated,
   });
 });
 
@@ -1397,6 +1483,7 @@ module.exports = {
   getCourseDownloadStatus,
   getSyncKey,
   getCourseLastUpdated,
+  getCourseSyncStatus,
   sendOtp,
   verifyOtp,
   getMe,

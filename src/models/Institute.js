@@ -47,11 +47,16 @@ const InstituteSchema = new Schema(
     // of that pull. Students only see topics captured in this snapshot —
     // topics added to the course afterward stay hidden until the institute
     // downloads/updates that course again ("Update Data").
+    // `last_updated` here is the content timestamp (course/topics/subtopics/
+    // modules) as of THIS pull — compared against the live value on every
+    // "Update Data" check (see instituteController.getCourseSyncStatus) so
+    // staleness works standalone, without a master server to compare against.
     downloaded_topic_snapshot: [
       {
         _id: false,
         course_id: { type: Schema.Types.ObjectId, ref: "Course", required: true },
         topic_ids: [{ type: Schema.Types.ObjectId, ref: "Topic" }],
+        last_updated: { type: Date },
       },
     ],
 

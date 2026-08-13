@@ -38,6 +38,7 @@ const {
   getCourseDownloadStatus,
   getSyncKey,
   getCourseLastUpdated,
+  getCourseSyncStatus,
   sendOtp,
   verifyOtp,
 } = require("../controller/instituteController");
@@ -144,6 +145,12 @@ router.get(
   protectInstitute,
   authorizeRoles("institute"),
   getCourseLastUpdated,
+);
+router.get(
+  "/me/courses/:courseId/sync-status",
+  protectInstitute,
+  authorizeRoles("institute"),
+  getCourseSyncStatus,
 );
 router.get(
   "/me/licenses",
