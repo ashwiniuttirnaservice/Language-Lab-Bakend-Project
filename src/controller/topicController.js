@@ -42,6 +42,28 @@ const getAll = asyncHandler(async (req, res) => {
 
   if (req.editor) {
     matchStage.created_by = new Types.ObjectId(req.editor._id);
+
+    // If a course is specified, only return topics actually assigned to it
+    // (Course.topic_ids) — otherwise every topic this editor ever created
+    // (across all courses) leaks into a single course's topic list.
+    const { course_id } = req.query;
+    if (course_id) {
+      const course = await Course.findById(course_id).select("topic_ids");
+      const assignedIds = course?.topic_ids || [];
+      matchStage._id = { $in: assignedIds.map((id) => new Types.ObjectId(id)) };
+    }
+  } else if (req.institute) {
+    // Institute admin (Settings → Course Content) — same source of truth as
+    // getCourseModuleCount: the course's own topic_ids, not download-gated,
+    // since this page is what drives/monitors that very download.
+    const { course_id } = req.query;
+    if (course_id) {
+      const course = await Course.findById(course_id).select("topic_ids");
+      const assignedIds = course?.topic_ids || [];
+      matchStage._id = { $in: assignedIds.map((id) => new Types.ObjectId(id)) };
+    } else {
+      return sendResponse(res, 200, true, "Topics fetched successfully.", []);
+    }
   } else if (req.student) {
     const { course_id } = req.query;
 
