@@ -456,14 +456,15 @@ const submitMine = asyncHandler(async (req, res) => {
   const { error: attachmentError } = validateSubmissionAttachment(wholeManualFile);
   if (attachmentError) return sendError(res, 400, false, attachmentError);
 
+  // Student submissions are kept on this server's own disk (see
+  // uploads.js's getFolderPath → "uploads/practical-submissions") instead of
+  // AWS — multer already wrote the file there, so this just points the DB
+  // record at it via the static route mounted in server.js. No network call
+  // out to the AWS upload proxy means no "Failed to upload file to AWS"
+  // failure when a student's connection drops mid-submit.
   let attachment_url;
   if (wholeManualFile) {
-    const uploaded = await uploadToAws({
-      file: wholeManualFile,
-      fileName: `practical_submission_${Date.now()}`,
-      folderName: "practical-submissions",
-    });
-    attachment_url = uploaded?.cdnUrl || uploaded?.fullS3URL || "";
+    attachment_url = `/media/practical-submissions/${wholeManualFile.filename}`;
   }
 
   if (solution_type === "file" && !attachment_url) {
@@ -488,14 +489,9 @@ const submitMine = asyncHandler(async (req, res) => {
     const questionId = qf.fieldname.replace("question_file_", "");
     if (!validQuestionIds.has(questionId)) continue;
 
-    const uploaded = await uploadToAws({
-      file: qf,
-      fileName: `practical_question_${questionId}_${Date.now()}`,
-      folderName: "practical-submissions",
-    });
     answerByQid[questionId] = {
       ...(answerByQid[questionId] || { question_id: questionId }),
-      answer_file_url: uploaded?.cdnUrl || uploaded?.fullS3URL || "",
+      answer_file_url: `/media/practical-submissions/${qf.filename}`,
     };
   }
 

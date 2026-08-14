@@ -52,6 +52,19 @@ const parseAnswers = (req, _res, next) => {
   }
   next();
 };
+// Same JSON-stringified-array-over-multipart pattern as questions/answers
+// above — needed now that create/update send a `taskMedia` file over
+// multipart instead of a JSON body, which flattens student_ids to a string.
+const parseStudentIds = (req, _res, next) => {
+  if (req.body?.student_ids && typeof req.body.student_ids === "string") {
+    try {
+      req.body.student_ids = JSON.parse(req.body.student_ids);
+    } catch {
+      /* leave as-is — will fail validation with a clear error */
+    }
+  }
+  next();
+};
 
 // ── Student Panel ──────────────────────────────────────────────────────────
 // Registered before the blanket institute middleware below — distinct
@@ -75,6 +88,7 @@ router.post(
   "/",
   upload.single("taskMedia"),
   parseQuestions,
+  parseStudentIds,
   validateSchema(createTaskSchema),
   create,
 );
@@ -87,6 +101,7 @@ router.put(
   "/:id",
   upload.single("taskMedia"),
   parseQuestions,
+  parseStudentIds,
   validateSchema(updateTaskSchema),
   update,
 );

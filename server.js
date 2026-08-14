@@ -65,6 +65,29 @@ app.use("/media", serveDownloadedMedia, downloadedMediaDir);
 // already ends in /api), so this is the route that actually gets hit.
 app.use("/api/media", serveDownloadedMedia, downloadedMediaDir);
 
+// Student practical-manual submissions (per-question answer files + the
+// whole-manual PDF) are kept on this server's own disk instead of AWS — see
+// practicalController.submitMine — so they need the same static serving +
+// cross-origin exemption as the downloaded-media route above.
+const practicalSubmissionsDir = express.static(
+  path.join(__dirname, "uploads", "practical-submissions"),
+);
+app.use("/media/practical-submissions", serveDownloadedMedia, practicalSubmissionsDir);
+app.use("/api/media/practical-submissions", serveDownloadedMedia, practicalSubmissionsDir);
+
+// Student-task media (institute's audio/video/document upload + a student's
+// submitted file) — same local-disk treatment as practical submissions above,
+// replacing the old chunked-upload-to-AWS flow (see taskController.js).
+const taskMediaDir = express.static(path.join(__dirname, "uploads", "tasks"));
+app.use("/media/tasks", serveDownloadedMedia, taskMediaDir);
+app.use("/api/media/tasks", serveDownloadedMedia, taskMediaDir);
+
+const taskSubmissionsDir = express.static(
+  path.join(__dirname, "uploads", "task-submissions"),
+);
+app.use("/media/task-submissions", serveDownloadedMedia, taskSubmissionsDir);
+app.use("/api/media/task-submissions", serveDownloadedMedia, taskSubmissionsDir);
+
 app.use("/api", require("./src/index"));
 
 app.use(require("./src/middlewares/errorHandler"));
