@@ -4,3 +4,4 @@ node_modules/
 logs/
 uploads/
 deploy.sh
+ecosystem.config.js
