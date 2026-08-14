@@ -55,36 +55,28 @@ app.use("/uploads", serveDownloadedMedia, express.static(uploadsDir));
 app.use("/api/uploads", serveDownloadedMedia, express.static(uploadsDir));
 app.use("/api/media", serveDownloadedMedia, downloadedMediaDir);
 
-// ==========================================
-// LOCAL UPLOAD API ENDPOINT (For Offline Use)
-// ==========================================
-const upload = multer({ storage: multer.memoryStorage() });
+// Student practical-manual submissions (per-question answer files + the
+// whole-manual PDF) are kept on this server's own disk instead of AWS — see
+// practicalController.submitMine — so they need the same static serving +
+// cross-origin exemption as the downloaded-media route above.
+const practicalSubmissionsDir = express.static(
+  path.join(__dirname, "uploads", "practical-submissions"),
+);
+app.use("/media/practical-submissions", serveDownloadedMedia, practicalSubmissionsDir);
+app.use("/api/media/practical-submissions", serveDownloadedMedia, practicalSubmissionsDir);
 
-app.post("/api/upload/local", upload.single("file"), (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ success: false, message: "No file uploaded" });
-    }
+// Student-task media (institute's audio/video/document upload + a student's
+// submitted file) — same local-disk treatment as practical submissions above,
+// replacing the old chunked-upload-to-AWS flow (see taskController.js).
+const taskMediaDir = express.static(path.join(__dirname, "uploads", "tasks"));
+app.use("/media/tasks", serveDownloadedMedia, taskMediaDir);
+app.use("/api/media/tasks", serveDownloadedMedia, taskMediaDir);
 
-    const localUploadDir = path.join(__dirname, "uploads", "local");
-    if (!fs.existsSync(localUploadDir)) {
-      fs.mkdirSync(localUploadDir, { recursive: true });
-    }
-
-    const fileName = `${Date.now()}_${req.file.originalname}`;
-    const filePath = path.join(localUploadDir, fileName);
-    fs.writeFileSync(filePath, req.file.buffer);
-
-    const baseUrl = `${req.protocol}://${req.get("host")}`;
-
-    res.json({
-      success: true,
-      fileUrl: `${baseUrl}/api/uploads/local/${fileName}`,
-    });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
-});
+const taskSubmissionsDir = express.static(
+  path.join(__dirname, "uploads", "task-submissions"),
+);
+app.use("/media/task-submissions", serveDownloadedMedia, taskSubmissionsDir);
+app.use("/api/media/task-submissions", serveDownloadedMedia, taskSubmissionsDir);
 
 app.use("/api", require("./src/index"));
 
