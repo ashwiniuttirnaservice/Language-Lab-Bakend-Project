@@ -5,7 +5,6 @@ const TaskSubmission = require("../models/TaskSubmission");
 const Student = require("../models/Student");
 const asyncHandler = require("../middlewares/asyncHandler");
 const { sendResponse, sendError } = require("../utils/apiResponse");
-const uploadToAws = require("../utils/awsUpload");
 
 // POST /task
 const create = asyncHandler(async (req, res) => {
@@ -40,20 +39,16 @@ const create = asyncHandler(async (req, res) => {
   }
 
   // Media-bearing types need a file, either as a direct multipart upload
-  // (req.file, legacy `taskMedia` field) or already uploaded beforehand via
-  // the chunked-upload endpoints, with the resulting URL sent as media_url
-  // (the frontend's current flow — see taskApi.createTask's comment).
+  // (req.file, `taskMedia` field) — saved on this server's own disk under
+  // uploads/tasks (see uploads.js's getFolderPath) instead of AWS — or,
+  // when editing without picking a new file, the URL the task already had
+  // (media_url_input, round-tripped by the frontend unchanged).
   // link/text carry their content directly in the request body instead.
   const mediaTypes = ["audio", "video", "document"];
   let media_url;
   if (mediaTypes.includes(type)) {
     if (req.file) {
-      const uploaded = await uploadToAws({
-        file: req.file,
-        fileName: `task_${Date.now()}`,
-        folderName: "tasks",
-      });
-      media_url = uploaded?.cdnUrl || uploaded?.fullS3URL || "";
+      media_url = `/media/tasks/${req.file.filename}`;
     } else if (media_url_input) {
       media_url = media_url_input;
     } else {
@@ -165,18 +160,13 @@ const update = asyncHandler(async (req, res) => {
   if (link_url !== undefined && nextType === "link") task.link_url = link_url;
   if (text_content !== undefined && nextType === "text") task.text_content = text_content;
 
-  // Same dual-path as create(): a direct multipart file (req.file, legacy)
-  // or a URL already uploaded via the chunked-upload endpoints beforehand
-  // (the frontend's current flow, sent as plain JSON media_url).
+  // Same dual-path as create(): a direct multipart file (req.file, saved
+  // locally under uploads/tasks) or, when no new file was picked, the
+  // task's existing media_url round-tripped unchanged by the frontend.
   const mediaTypes = ["audio", "video", "document"];
   if (mediaTypes.includes(nextType)) {
     if (req.file) {
-      const uploaded = await uploadToAws({
-        file: req.file,
-        fileName: `task_${Date.now()}`,
-        folderName: "tasks",
-      });
-      task.media_url = uploaded?.cdnUrl || uploaded?.fullS3URL || "";
+      task.media_url = `/media/tasks/${req.file.filename}`;
     } else if (media_url_input !== undefined) {
       task.media_url = media_url_input;
     }
@@ -570,14 +560,13 @@ const submitMine = asyncHandler(async (req, res) => {
 
   const { submitted_text, answers } = req.body;
 
+  // Saved on this server's own disk under uploads/task-submissions (see
+  // uploads.js's getFolderPath) instead of AWS — same as
+  // practicalController.submitMine, so a dropped connection mid-submit
+  // fails as a network error instead of an opaque AWS upload failure.
   let submitted_media_url;
   if (req.file) {
-    const uploaded = await uploadToAws({
-      file: req.file,
-      fileName: `task_submission_${Date.now()}`,
-      folderName: "task-submissions",
-    });
-    submitted_media_url = uploaded?.cdnUrl || uploaded?.fullS3URL || "";
+    submitted_media_url = `/media/task-submissions/${req.file.filename}`;
   }
 
   if (!submitted_media_url && !submitted_text && !(answers && answers.length)) {
