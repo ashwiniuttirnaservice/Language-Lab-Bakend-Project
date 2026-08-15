@@ -8,6 +8,7 @@ const ExerciseModule = require("../models/ExerciseModule");
 const VocabularyModule = require("../models/VocabularyModule");
 const asyncHandler = require("../middlewares/asyncHandler");
 const { sendResponse, sendError } = require("../utils/apiResponse");
+const { getGrantedIds } = require("../utils/studentAccess");
 
 // POST /api/super-admin/course
 const create = asyncHandler(async (req, res) => {
@@ -96,7 +97,25 @@ const getCourseModuleCount = asyncHandler(async (req, res) => {
     { topic_id: { $in: topicIds }, is_active: true },
     "_id"
   );
-  const subTopicIds = subTopics.map((st) => st._id);
+  let subTopicIds = subTopics.map((st) => st._id);
+
+  // Student Learning Access: a logged-in student should only see module
+  // counts for subtopics their department+batch was actually granted —
+  // mirrors subTopicController.getByTopic / moduleController's subtopic-scoped
+  // check. Non-student callers (e.g. institute admin viewing course content)
+  // keep seeing the full course-wide total, unrestricted.
+  if (req.student) {
+    const grantedSubtopicIds = await getGrantedIds({
+      instituteId: req.student.institute_id,
+      segment: req.student.segment,
+      year: req.student.year,
+      scopeMatch: { course_id: course._id },
+      idField: "subtopic_ids",
+    });
+    if (grantedSubtopicIds) {
+      subTopicIds = subTopicIds.filter((id) => grantedSubtopicIds.has(id.toString()));
+    }
+  }
 
   // Count all active modules in parallel
   const [videoCount, audioCount, textCount, vocabularyCount, exerciseCount] =
