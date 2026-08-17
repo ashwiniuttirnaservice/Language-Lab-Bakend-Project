@@ -17,7 +17,7 @@ const create = asyncHandler(async (req, res) => {
     shuffle_options,
     show_explanation,
     total_marks,
-    time_limit_sec,
+    duration,
     max_attempts,
     userType,
   } = req.body;
@@ -33,7 +33,7 @@ const create = asyncHandler(async (req, res) => {
     shuffle_options,
     show_explanation,
     total_marks,
-    time_limit_sec,
+    duration,
     max_attempts,
     userType,
     created_by: req.admin?._id || req.institute?._id,
@@ -86,7 +86,7 @@ const update = asyncHandler(async (req, res) => {
     "shuffle_options",
     "show_explanation",
     "total_marks",
-    "time_limit_sec",
+    "duration",
     "max_attempts",
     "userType",
     "is_active",
@@ -114,7 +114,7 @@ const remove = asyncHandler(async (req, res) => {
 
 // POST /api/assessment/bulk-upload
 // Excel columns (header row required):
-//   subject_title, title, description, difficulty,
+//   subject_title, title, description, difficulty, duration_minutes, duration_seconds,
 //   question_text, optionA, optionB, optionC, optionD, correct_answer,
 //   explanation, hint, marks, negative_marks
 // One row = one MCQ question. "subject_title" must match an existing
@@ -164,6 +164,10 @@ const bulkUpload = asyncHandler(async (req, res) => {
         title,
         description: String(row["description"] || row["Description"] || "").trim(),
         difficulty: String(row["difficulty"] || row["Difficulty"] || "easy").trim(),
+        duration: {
+          minutes: Number(row["duration_minutes"] || row["Duration Minutes"]) || 0,
+          seconds: Number(row["duration_seconds"] || row["Duration Seconds"]) || 0,
+        },
         questions: [],
       });
     }
@@ -212,6 +216,7 @@ const bulkUpload = asyncHandler(async (req, res) => {
           title: group.title,
           description: group.description || undefined,
           difficulty: group.difficulty,
+          duration: group.duration,
           questions: group.questions,
           created_by: req.admin?._id || req.institute?._id,
         });

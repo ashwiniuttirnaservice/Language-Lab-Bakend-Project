@@ -251,19 +251,34 @@ async function syncCourseFromPublicDownload(courseId, instituteId, masterToken) 
   );
 }
 
-// Pulls every active Subject + Assessment from master (GET /sync/subjects,
-// same sync_api_key as syncCourseFromMaster) and mirrors them into the local
-// DB, keyed by master's _id. Unlike courses, Subject/Assessment aren't tied
-// to a course or gated by Institute.course_id — this is a flat "grab
-// everything current" sync, called best-effort alongside the course sync in
-// instituteController.downloadCourseData so a local deployment's students end
-// up seeing the same Subjects/Assessments as the shared-DB deployment.
+// Pulls every active Subject + Assessment from master and mirrors them into
+// the local DB, keyed by master's _id. Unlike courses, Subject/Assessment
+// aren't tied to a course or gated by Institute.course_id — this is a flat
+// "grab everything current" sync, called best-effort alongside the course
+// sync in instituteController.downloadCourseData so a local deployment's
+// students end up seeing the same Subjects/Assessments as the shared-DB
+// deployment.
+//
+// Deliberately hits master's plain GET /api/subject + GET /api/assessment
+// instead of a sync_api_key-gated /sync/subjects route — both are already
+// open, unauthenticated endpoints on master (see subjectRoutes.js /
+// assessmentRoutes.js), so this needs neither SYNC_API_KEY nor any new
+// master-side sync route to exist; it works the moment master has the
+// Subject/Assessment feature deployed at all, same as any other client
+// hitting those routes.
 async function syncSubjectsFromMaster() {
-  const response = await axios.get(
-    `${process.env.MASTER_API_URL}/api/sync/subjects`,
-    { headers: { "x-sync-api-key": process.env.SYNC_API_KEY } },
-  );
-  const { subjects, assessments } = response.data.data;
+  const [subjectsRes, assessmentsRes] = await Promise.all([
+    axios.get(`${process.env.MASTER_API_URL}/api/subject`),
+    axios.get(`${process.env.MASTER_API_URL}/api/assessment`),
+  ]);
+  const subjects = subjectsRes.data?.data || [];
+  // GET /api/assessment populates subject_id -> { _id, title } for display
+  // purposes — flatten it back to a plain id before upserting, so the local
+  // Assessment's subject_id stays a real reference instead of an embedded object.
+  const assessments = (assessmentsRes.data?.data || []).map((a) => ({
+    ...a,
+    subject_id: a.subject_id?._id || a.subject_id,
+  }));
 
   await Promise.all(subjects.map((s) => upsertById(Subject, s)));
   await Promise.all(assessments.map((a) => upsertById(Assessment, a)));

@@ -40,7 +40,14 @@ const AssessmentSchema = new Schema(
     shuffle_options: { type: Boolean, default: true },
     show_explanation: { type: Boolean, default: true },
     total_marks: { type: Number, default: 0 },
-    time_limit_sec: { type: Number },
+    // Matches the reference project's IQTest testDuration shape — minutes +
+    // seconds instead of a single time_limit_sec, so the admin form can take
+    // duration the same natural way. Both 0/unset = untimed (no countdown
+    // shown to the student — see assessmentAttemptController's totalSeconds()).
+    duration: {
+      minutes: { type: Number, default: 0 },
+      seconds: { type: Number, default: 0 },
+    },
     max_attempts: { type: Number, default: 5 },
 
     // "0" = assessment hidden from students, "1" = shown. Toggled by whoever

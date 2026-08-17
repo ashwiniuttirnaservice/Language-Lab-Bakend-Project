@@ -2,6 +2,11 @@ const Joi = require("joi");
 
 const objectId = Joi.string().hex().length(24);
 
+const durationSchema = Joi.object({
+  minutes: Joi.number().integer().min(0),
+  seconds: Joi.number().integer().min(0).max(59),
+});
+
 const questionSchema = Joi.object({
   question_text: Joi.string().trim().required(),
   optionA: Joi.string().trim().required(),
@@ -26,7 +31,7 @@ const createAssessmentSchema = Joi.object({
   shuffle_options: Joi.boolean(),
   show_explanation: Joi.boolean(),
   total_marks: Joi.number(),
-  time_limit_sec: Joi.number(),
+  duration: durationSchema,
   max_attempts: Joi.number(),
   userType: Joi.string().valid("0", "1"),
 });
@@ -41,7 +46,7 @@ const updateAssessmentSchema = Joi.object({
   shuffle_options: Joi.boolean(),
   show_explanation: Joi.boolean(),
   total_marks: Joi.number(),
-  time_limit_sec: Joi.number(),
+  duration: durationSchema,
   max_attempts: Joi.number(),
   userType: Joi.string().valid("0", "1"),
   is_active: Joi.boolean(),
