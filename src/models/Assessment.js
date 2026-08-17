@@ -12,10 +12,6 @@ const AssessmentSchema = new Schema(
     order: { type: Number, default: 0 },
     module_type: { type: String, default: "assessment", immutable: true },
 
-    exercise_type: {
-      type: String,
-      required: true,
-    },
     difficulty: {
       type: String,
       enum: ["easy", "medium", "hard"],

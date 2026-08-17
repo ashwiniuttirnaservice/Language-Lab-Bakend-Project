@@ -11,7 +11,6 @@ const create = asyncHandler(async (req, res) => {
     title,
     description,
     order,
-    exercise_type,
     difficulty,
     questions,
     shuffle_questions,
@@ -28,7 +27,6 @@ const create = asyncHandler(async (req, res) => {
     title,
     description,
     order,
-    exercise_type,
     difficulty,
     questions,
     shuffle_questions,
@@ -82,7 +80,6 @@ const update = asyncHandler(async (req, res) => {
     "title",
     "description",
     "order",
-    "exercise_type",
     "difficulty",
     "questions",
     "shuffle_questions",
@@ -117,7 +114,7 @@ const remove = asyncHandler(async (req, res) => {
 
 // POST /api/assessment/bulk-upload
 // Excel columns (header row required):
-//   subject_title, title, description, exercise_type, difficulty,
+//   subject_title, title, description, difficulty,
 //   question_text, optionA, optionB, optionC, optionD, correct_answer,
 //   explanation, hint, marks, negative_marks
 // One row = one MCQ question. "subject_title" must match an existing
@@ -166,7 +163,6 @@ const bulkUpload = asyncHandler(async (req, res) => {
         subject_title,
         title,
         description: String(row["description"] || row["Description"] || "").trim(),
-        exercise_type: String(row["exercise_type"] || row["Exercise Type"] || "assessment").trim(),
         difficulty: String(row["difficulty"] || row["Difficulty"] || "easy").trim(),
         questions: [],
       });
@@ -215,7 +211,6 @@ const bulkUpload = asyncHandler(async (req, res) => {
           subject_id: subject._id,
           title: group.title,
           description: group.description || undefined,
-          exercise_type: group.exercise_type,
           difficulty: group.difficulty,
           questions: group.questions,
           created_by: req.admin?._id || req.institute?._id,
