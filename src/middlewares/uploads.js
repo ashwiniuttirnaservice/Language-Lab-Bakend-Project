@@ -25,6 +25,8 @@ const getFolderPath = (fieldname) => {
       return "uploads/students";
     case "studentExcel":
       return "uploads/students/excel";
+    case "assessmentExcel":
+      return "uploads/assessments/excel";
     case "practicalAttachment":
       return "uploads/practicals";
     case "practicalSubmissionAttachment":

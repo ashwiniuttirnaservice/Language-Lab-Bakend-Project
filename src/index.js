@@ -12,6 +12,8 @@ router.use("/editor", require("./routes/editorRoutes"));
 router.use("/student", require("./routes/studentRoutes"));
 router.use("/practical", require("./routes/practicalRoutes"));
 router.use("/task", require("./routes/taskRoutes"));
+router.use("/subject", require("./routes/subjectRoutes"));
+router.use("/assessment", require("./routes/assessmentRoutes"));
 router.use("/topic", require("./routes/topicRoutes"));
 router.use("/subtopic", require("./routes/subTopicRoutes"));
 router.use("/module", require("./routes/moduleRoutes"));

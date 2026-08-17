@@ -11,6 +11,8 @@ const TextModule = require("../models/TextModule");
 const ExerciseModule = require("../models/ExerciseModule");
 const Institute = require("../models/Institute");
 const License = require("../models/License");
+const Subject = require("../models/Subject");
+const Assessment = require("../models/Assessment");
 const logger = require("../utils/logger");
 
 const MODULE_MODEL_BY_TYPE = {
@@ -249,6 +251,28 @@ async function syncCourseFromPublicDownload(courseId, instituteId, masterToken) 
   );
 }
 
+// Pulls every active Subject + Assessment from master (GET /sync/subjects,
+// same sync_api_key as syncCourseFromMaster) and mirrors them into the local
+// DB, keyed by master's _id. Unlike courses, Subject/Assessment aren't tied
+// to a course or gated by Institute.course_id — this is a flat "grab
+// everything current" sync, called best-effort alongside the course sync in
+// instituteController.downloadCourseData so a local deployment's students end
+// up seeing the same Subjects/Assessments as the shared-DB deployment.
+async function syncSubjectsFromMaster() {
+  const response = await axios.get(
+    `${process.env.MASTER_API_URL}/api/sync/subjects`,
+    { headers: { "x-sync-api-key": process.env.SYNC_API_KEY } },
+  );
+  const { subjects, assessments } = response.data.data;
+
+  await Promise.all(subjects.map((s) => upsertById(Subject, s)));
+  await Promise.all(assessments.map((a) => upsertById(Assessment, a)));
+
+  logger.info(
+    `Synced ${subjects.length} subject(s) and ${assessments.length} assessment(s) from master.`,
+  );
+}
+
 module.exports = {
   isSyncEnabled,
   syncCourseFromMaster,
@@ -256,4 +280,5 @@ module.exports = {
   syncInstituteFromMaster,
   syncInstituteFromPublicLogin,
   syncLicensesFromMaster,
+  syncSubjectsFromMaster,
 };
