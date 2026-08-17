@@ -9,8 +9,6 @@ const AudioModule = require("../models/AudioModule");
 const VideoModule = require("../models/VideoModule");
 const TextModule = require("../models/TextModule");
 const ExerciseModule = require("../models/ExerciseModule");
-const Subject = require("../models/Subject");
-const Assessment = require("../models/Assessment");
 const asyncHandler = require("../middlewares/asyncHandler");
 const { sendResponse, sendError } = require("../utils/apiResponse");
 
@@ -104,26 +102,4 @@ const getCourseBundle = asyncHandler(async (req, res) => {
   });
 });
 
-// GET /sync/subjects
-// Serves every active Subject + active Assessment as plain JSON, for an
-// institute's own local backend to pull down and upsert into its own local
-// database. Unlike getCourseBundle above, Subject/Assessment aren't scoped
-// to a course or an institute (no course_id/institute_id on either model —
-// same global-content shape as Course itself, just not download-gated by
-// Institute.course_id/downloaded_course_ids), so this always returns the
-// full current set rather than filtering by what's "assigned". Called
-// alongside the course sync in instituteController.downloadCourseData
-// (see masterSyncService.syncSubjectsFromMaster) so a local deployment's
-// students see the same subjects/assessments as the shared-DB deployment
-// the moment their institute next downloads any course.
-const getSubjectsBundle = asyncHandler(async (req, res) => {
-  const subjects = await Subject.find({ is_active: true }).lean();
-  const assessments = await Assessment.find({ is_active: true }).lean();
-
-  return sendResponse(res, 200, true, "Subjects bundle fetched.", {
-    subjects,
-    assessments,
-  });
-});
-
-module.exports = { requireSyncKey, getInstituteSelf, getCourseBundle, getSubjectsBundle };
+module.exports = { requireSyncKey, getInstituteSelf, getCourseBundle };
