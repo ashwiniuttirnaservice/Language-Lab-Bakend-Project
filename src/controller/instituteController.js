@@ -36,6 +36,7 @@ const {
   syncCourseFromPublicDownload,
   syncInstituteFromMaster,
   syncInstituteFromPublicLogin,
+  syncSubjectsFromMaster,
 } = require("../service/masterSyncService");
 const logger = require("../utils/logger");
 
@@ -969,6 +970,16 @@ const downloadCourseData = asyncHandler(async (req, res) => {
           `Course sync failed for ${courseId}, serving already-cached local copy: ${error.message}`,
         );
       }
+    }
+
+    // Best-effort, non-blocking — Subjects/Assessments aren't part of this
+    // course's own content tree (see getSubjectsBundle), so a failure here
+    // must never fail the course download itself. Whatever's already in the
+    // local DB from a previous successful sync just keeps serving as-is.
+    try {
+      await syncSubjectsFromMaster();
+    } catch (error) {
+      logger.error(`Subjects sync failed during course download: ${error.message}`);
     }
   }
 
