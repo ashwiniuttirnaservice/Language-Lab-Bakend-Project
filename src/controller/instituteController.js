@@ -14,6 +14,8 @@ const AudioModule = require("../models/AudioModule");
 const VideoModule = require("../models/VideoModule");
 const TextModule = require("../models/TextModule");
 const ExerciseModule = require("../models/ExerciseModule");
+const Subject = require("../models/Subject");
+const Assessment = require("../models/Assessment");
 const Task = require("../models/Task");
 const TaskSubmission = require("../models/TaskSubmission");
 const Practical = require("../models/Practical");
@@ -36,6 +38,7 @@ const {
   syncCourseFromPublicDownload,
   syncInstituteFromMaster,
   syncInstituteFromPublicLogin,
+  syncSubjectsFromMaster,
 } = require("../service/masterSyncService");
 const logger = require("../utils/logger");
 
@@ -970,6 +973,16 @@ const downloadCourseData = asyncHandler(async (req, res) => {
         );
       }
     }
+
+    // Best-effort, non-blocking — Subjects/Assessments aren't part of this
+    // course's own content tree (see getSubjectsBundle), so a failure here
+    // must never fail the course download itself. Whatever's already in the
+    // local DB from a previous successful sync just keeps serving as-is.
+    try {
+      await syncSubjectsFromMaster();
+    } catch (error) {
+      logger.error(`Subjects sync failed during course download: ${error.message}`);
+    }
   }
 
   const institute = await Institute.findById(req.institute._id).select("course_id");
@@ -1173,6 +1186,39 @@ const downloadCourseData = asyncHandler(async (req, res) => {
     course,
     topics: topicsWithContent,
     last_updated: lastUpdated,
+  });
+});
+
+// GET /institute/me/subjects/download
+// Standalone twin of downloadCourseData above, but for Subjects/Assessments
+// instead of a specific course — same "sync from master if this is a
+// standalone local-DB deployment, then read back from the local DB" shape,
+// just not tied to any courseId since Subject/Assessment aren't scoped to a
+// course. Lets an institute refresh its local Subjects/Assessments on demand
+// (e.g. after adding/editing one on master) without needing to re-download a
+// whole course just to trigger the bundled sync in downloadCourseData.
+const downloadSubjectsData = asyncHandler(async (req, res) => {
+  let syncError = null;
+
+  if (isSyncEnabled()) {
+    try {
+      await syncSubjectsFromMaster();
+    } catch (error) {
+      // Best-effort, same as downloadCourseData's course sync — a failed
+      // sync just means "serve whatever's already in the local DB from a
+      // previous successful sync" instead of failing the whole request.
+      syncError = error.response?.data?.message || error.message;
+      logger.error(`Subjects sync failed on demand: ${syncError}`);
+    }
+  }
+
+  const subjects = await Subject.find({ is_active: true }).sort({ createdAt: -1 }).lean();
+  const assessments = await Assessment.find({ is_active: true }).lean();
+
+  return sendResponse(res, 200, true, "Subjects data pulled successfully.", {
+    subjects_count: subjects.length,
+    assessments_count: assessments.length,
+    sync_error: syncError,
   });
 });
 
@@ -1480,6 +1526,7 @@ module.exports = {
   logout,
   verifyByCode,
   downloadCourseData,
+  downloadSubjectsData,
   getCourseDownloadStatus,
   getSyncKey,
   getCourseLastUpdated,
