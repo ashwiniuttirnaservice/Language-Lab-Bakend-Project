@@ -43,11 +43,9 @@ const create = asyncHandler(async (req, res) => {
       return sendError(res, 409, false, "Email already registered.");
   }
 
-  const institute = await Institute.findById(institute_id).select(
-    "institute_code",
-  );
-  if (!institute)
-    return sendError(res, 404, false, "Institute not found.");
+  const institute =
+    await Institute.findById(institute_id).select("institute_code");
+  if (!institute) return sendError(res, 404, false, "Institute not found.");
 
   let profilePhoto = "";
   if (req.file) {
@@ -153,7 +151,8 @@ const getAll = asyncHandler(async (req, res) => {
   // page/limit are optional — omit both to keep the old "return everything"
   // behavior for callers (e.g. the current student list UI) that still do
   // their own client-side pagination over the full list.
-  const paginated = req.query.page !== undefined || req.query.limit !== undefined;
+  const paginated =
+    req.query.page !== undefined || req.query.limit !== undefined;
   const page = Math.max(1, Number(req.query.page) || 1);
   const limit = Math.min(200, Number(req.query.limit) || 50);
 
@@ -349,7 +348,12 @@ const login = asyncHandler(async (req, res) => {
   // different institute than the one picked in the dropdown, or the password
   // is wrong — never reveal which part of the credential triple failed.
   const invalidCredentials = () =>
-    sendError(res, 401, false, "Invalid institute, enrollment number, or password.");
+    sendError(
+      res,
+      401,
+      false,
+      "Invalid institute, enrollment number, or password.",
+    );
 
   if (!student || student.institute_id.toString() !== institute_id)
     return invalidCredentials();
@@ -421,9 +425,9 @@ const login = asyncHandler(async (req, res) => {
   }).sort({ logged_in_at: -1 });
 
   if (existingSession) {
-    const existingLicense = await License.findById(existingSession.license_id).select(
-      "license_code",
-    );
+    const existingLicense = await License.findById(
+      existingSession.license_id,
+    ).select("license_code");
 
     return sendResponse(res, 200, true, `Welcome back, ${student.full_name}!`, {
       token: existingSession.token,
@@ -461,15 +465,30 @@ const login = asyncHandler(async (req, res) => {
   await license.save();
 
   if (license.status !== "active") {
-    return sendError(res, 403, false, "This license is not active. Contact admin.");
+    return sendError(
+      res,
+      403,
+      false,
+      "This license is not active. Contact admin.",
+    );
   }
 
   if (license.expiry_date < now) {
-    return sendError(res, 403, false, "This license has expired. Contact admin.");
+    return sendError(
+      res,
+      403,
+      false,
+      "This license has expired. Contact admin.",
+    );
   }
 
   if (license.start_date > now) {
-    return sendError(res, 403, false, "This license has not started yet. Contact admin.");
+    return sendError(
+      res,
+      403,
+      false,
+      "This license has not started yet. Contact admin.",
+    );
   }
 
   if (license.active_sessions >= license.total_seats) {
@@ -538,7 +557,9 @@ const logout = asyncHandler(async (req, res) => {
 
   // Clear last_seen_at so dashboard "active now" / login-status stats reflect
   // this logout immediately instead of waiting out the 5-min heartbeat decay.
-  await Student.findByIdAndUpdate(req.student._id, { $unset: { last_seen_at: "" } });
+  await Student.findByIdAndUpdate(req.student._id, {
+    $unset: { last_seen_at: "" },
+  });
 
   return sendResponse(res, 200, true, "Logged out successfully.");
 });
@@ -587,7 +608,13 @@ const updateMe = asyncHandler(async (req, res) => {
 
   const { password: _pw, ...safeStudent } = student.toObject();
 
-  return sendResponse(res, 200, true, "Profile updated successfully.", safeStudent);
+  return sendResponse(
+    res,
+    200,
+    true,
+    "Profile updated successfully.",
+    safeStudent,
+  );
 });
 
 // ── College: bulk upload students from Excel ──────────────────────────────────
@@ -598,11 +625,9 @@ const bulkUpload = asyncHandler(async (req, res) => {
   if (!institute_id)
     return sendError(res, 400, false, "institute_id is required.");
 
-  const institute = await Institute.findById(institute_id).select(
-    "institute_code",
-  );
-  if (!institute)
-    return sendError(res, 404, false, "Institute not found.");
+  const institute =
+    await Institute.findById(institute_id).select("institute_code");
+  if (!institute) return sendError(res, 404, false, "Institute not found.");
 
   // Parse Excel
   const workbook = xlsx.readFile(req.file.path);
