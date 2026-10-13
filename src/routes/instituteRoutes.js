@@ -35,6 +35,7 @@ const {
   getActiveStudentsCount,
   verifyByCode,
   downloadCourseData,
+  downloadSubjectsData,
   getCourseDownloadStatus,
   getSyncKey,
   getCourseLastUpdated,
@@ -127,6 +128,14 @@ router.get(
   protectInstitute,
   authorizeRoles("institute"),
   downloadCourseData,
+);
+// Standalone Subjects/Assessments sync — not tied to any course, see
+// instituteController.downloadSubjectsData.
+router.get(
+  "/me/subjects/download",
+  protectInstitute,
+  authorizeRoles("institute"),
+  downloadSubjectsData,
 );
 router.get(
   "/me/courses/:courseId/download-status",

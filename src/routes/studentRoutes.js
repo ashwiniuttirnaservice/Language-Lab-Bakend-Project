@@ -23,6 +23,8 @@ const {
   getOne,
   update,
   remove,
+  permanentDelete,
+  bulkPermanentDelete,
   toggleStatus,
   login,
   logout,
@@ -87,6 +89,15 @@ router.put(
   validateSchema(bulkAssignCoursesSchema),
   bulkAssignCourses,
 );
+// Must be registered before "/:id" — otherwise DELETE /:id swallows this
+// path, treating "bulk-permanent-delete" as the id and crashing on
+// ObjectId cast.
+router.delete(
+  "/bulk-permanent-delete",
+  protectInstitute,
+  authorizeRoles("institute"),
+  bulkPermanentDelete,
+);
 router.get("/:id", protectInstitute, authorizeRoles("institute"), getOne);
 router.put(
   "/:id",
@@ -97,6 +108,12 @@ router.put(
   update,
 );
 router.delete("/:id", protectInstitute, authorizeRoles("institute"), remove);
+router.delete(
+  "/:id/permanent",
+  protectInstitute,
+  authorizeRoles("institute"),
+  permanentDelete,
+);
 router.put(
   "/:id/toggle-status",
   protectInstitute,
