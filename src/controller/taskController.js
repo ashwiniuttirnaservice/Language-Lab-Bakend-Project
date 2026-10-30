@@ -5,6 +5,7 @@ const TaskSubmission = require("../models/TaskSubmission");
 const Student = require("../models/Student");
 const asyncHandler = require("../middlewares/asyncHandler");
 const { sendResponse, sendError } = require("../utils/apiResponse");
+const { getTeacherAssignedCourseIds, isCourseAllowed, buildTeacherStudentScope, isBatchAllowed } = require("../utils/teacherAccess");
 
 // POST /task
 const create = asyncHandler(async (req, res) => {
@@ -36,6 +37,18 @@ const create = asyncHandler(async (req, res) => {
       false,
       "This course has not been downloaded by your institute yet.",
     );
+  }
+
+  if (req.teacher) {
+    const allowedCourseIds = await getTeacherAssignedCourseIds(req.teacher);
+    if (!isCourseAllowed(course_id, allowedCourseIds)) {
+      return sendError(
+        res,
+        403,
+        false,
+        "You are not assigned to instruct this course.",
+      );
+    }
   }
 
   // Media-bearing types need a file, either as a direct multipart upload
@@ -144,6 +157,19 @@ const update = asyncHandler(async (req, res) => {
         "This course has not been downloaded by your institute yet.",
       );
     }
+
+    if (req.teacher) {
+      const allowedCourseIds = await getTeacherAssignedCourseIds(req.teacher);
+      if (!isCourseAllowed(course_id, allowedCourseIds)) {
+        return sendError(
+          res,
+          403,
+          false,
+          "You are not assigned to instruct this course.",
+        );
+      }
+    }
+
     task.course_id = course_id;
   }
 
@@ -217,7 +243,33 @@ const getAll = asyncHandler(async (req, res) => {
     institute_id: new Types.ObjectId(req.institute._id),
     is_deleted: false,
   };
-  if (req.query.courseId) match.course_id = new Types.ObjectId(req.query.courseId);
+
+  if (req.teacher) {
+    const allowedCourseIds = await getTeacherAssignedCourseIds(req.teacher);
+    if (!allowedCourseIds || allowedCourseIds.length === 0) {
+      return sendResponse(res, 200, true, "Tasks fetched successfully.", {
+        total: 0,
+        page: paginated ? page : 1,
+        limit: paginated ? limit : 0,
+        tasks: [],
+      });
+    }
+
+    if (req.query.courseId) {
+      const requestedId = req.query.courseId.toString();
+      const isAllowed = allowedCourseIds.some((id) => id.toString() === requestedId);
+      if (!isAllowed) {
+        match.course_id = new Types.ObjectId(); // forces empty result
+      } else {
+        match.course_id = new Types.ObjectId(req.query.courseId);
+      }
+    } else {
+      match.course_id = { $in: allowedCourseIds };
+    }
+  } else if (req.query.courseId) {
+    match.course_id = new Types.ObjectId(req.query.courseId);
+  }
+
   if (req.query.topicId) match.topic_id = new Types.ObjectId(req.query.topicId);
   if (req.query.status) match.status = req.query.status;
 
@@ -292,6 +344,18 @@ const getOne = asyncHandler(async (req, res) => {
 
   if (!task) return sendError(res, 404, false, "Task not found.");
 
+  if (req.teacher) {
+    const allowedCourseIds = await getTeacherAssignedCourseIds(req.teacher);
+    if (!isCourseAllowed(task.course_id?._id || task.course_id, allowedCourseIds)) {
+      return sendError(
+        res,
+        403,
+        false,
+        "You do not have access to tasks for this course.",
+      );
+    }
+  }
+
   const statusCounts = await TaskSubmission.aggregate([
     { $match: { task_id: task._id } },
     { $group: { _id: "$status", count: { $sum: 1 } } },
@@ -313,8 +377,20 @@ const getSubmissions = asyncHandler(async (req, res) => {
     _id: req.params.id,
     institute_id: req.institute._id,
     is_deleted: false,
-  }).select("_id");
+  }).select("_id course_id");
   if (!task) return sendError(res, 404, false, "Task not found.");
+
+  if (req.teacher) {
+    const allowedCourseIds = await getTeacherAssignedCourseIds(req.teacher);
+    if (!isCourseAllowed(task.course_id, allowedCourseIds)) {
+      return sendError(
+        res,
+        403,
+        false,
+        "You do not have access to submissions for this course.",
+      );
+    }
+  }
 
   const submissions = await TaskSubmission.find({ task_id: task._id })
     .populate("student_id", "full_name enrollment_no")
@@ -332,8 +408,20 @@ const updateSubmission = asyncHandler(async (req, res) => {
   const task = await Task.findOne({
     _id: req.params.id,
     institute_id: req.institute._id,
-  }).select("_id");
+  }).select("_id course_id");
   if (!task) return sendError(res, 404, false, "Task not found.");
+
+  if (req.teacher) {
+    const allowedCourseIds = await getTeacherAssignedCourseIds(req.teacher);
+    if (!isCourseAllowed(task.course_id, allowedCourseIds)) {
+      return sendError(
+        res,
+        403,
+        false,
+        "You do not have access to grade submissions for this course.",
+      );
+    }
+  }
 
   const { status, grade, feedback } = req.body;
 
@@ -365,6 +453,39 @@ const assign = asyncHandler(async (req, res) => {
   });
   if (!task) return sendError(res, 404, false, "Task not found.");
 
+  if (req.teacher) {
+    const allowedCourseIds = await getTeacherAssignedCourseIds(req.teacher);
+    if (!isCourseAllowed(task.course_id, allowedCourseIds)) {
+      return sendError(
+        res,
+        403,
+        false,
+        "You do not have access to assign tasks for this course.",
+      );
+    }
+
+    const hasDepartments = req.teacher.assigned_departments?.length > 0;
+    const hasBatches = req.teacher.assigned_batches?.length > 0;
+    const { segment, year } = req.body;
+
+    if (hasDepartments && !req.teacher.assigned_departments.includes(segment)) {
+      return sendError(
+        res,
+        403,
+        false,
+        "You cannot assign tasks to departments outside your scope.",
+      );
+    }
+    if (hasBatches && !isBatchAllowed(req.teacher, segment, year)) {
+      return sendError(
+        res,
+        403,
+        false,
+        "You cannot assign tasks to batches outside your scope.",
+      );
+    }
+  }
+
   const { segment, year } = req.body;
 
   const alreadyAssigned = task.assigned_batches.some(
@@ -383,15 +504,25 @@ const assign = asyncHandler(async (req, res) => {
 // practicalController.getDepartments — backs the Department/Batch selects
 // on the Assign Task form.
 const getDepartments = asyncHandler(async (req, res) => {
+  const match = {
+    institute_id: new Types.ObjectId(req.institute._id),
+    status: "active",
+    segment: { $nin: [null, ""] },
+    year: { $ne: null },
+  };
+
+  if (req.teacher) {
+    const scope = buildTeacherStudentScope(req.teacher);
+    if (scope) {
+      if (scope._id && scope._id.$in && scope._id.$in.length === 0) {
+        return sendResponse(res, 200, true, "Departments and batches fetched.", []);
+      }
+      Object.assign(match, scope);
+    }
+  }
+
   const groups = await Student.aggregate([
-    {
-      $match: {
-        institute_id: new Types.ObjectId(req.institute._id),
-        status: "active",
-        segment: { $nin: [null, ""] },
-        year: { $ne: null },
-      },
-    },
+    { $match: match },
     {
       $group: {
         _id: { segment: "$segment", year: "$year" },
@@ -421,12 +552,27 @@ const getDepartments = asyncHandler(async (req, res) => {
 
 // DELETE /task/:id
 const remove = asyncHandler(async (req, res) => {
-  const task = await Task.findOneAndUpdate(
-    { _id: req.params.id, institute_id: req.institute._id, is_deleted: false },
-    { $set: { is_deleted: true } },
-    { new: true },
-  );
+  const task = await Task.findOne({
+    _id: req.params.id,
+    institute_id: req.institute._id,
+    is_deleted: false,
+  });
   if (!task) return sendError(res, 404, false, "Task not found.");
+
+  if (req.teacher) {
+    const allowedCourseIds = await getTeacherAssignedCourseIds(req.teacher);
+    if (!isCourseAllowed(task.course_id, allowedCourseIds)) {
+      return sendError(
+        res,
+        403,
+        false,
+        "You do not have access to delete tasks for this course.",
+      );
+    }
+  }
+
+  task.is_deleted = true;
+  await task.save();
 
   return sendResponse(res, 200, true, "Task deleted successfully.");
 });

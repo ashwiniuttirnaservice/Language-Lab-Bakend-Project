@@ -22,7 +22,7 @@ router.get("/topic/:id", protectStudent, authorizeRoles("student"), getTopicProg
 // Editor — view a student's progress
 router.get("/student/:id", protectEditor, authorizeRoles("editor"), getStudentProgress);
 
-// Institute — view a student's progress
-router.get("/institute/student/:id", protectInstitute, authorizeRoles("institute"), getStudentProgress);
+// Institute & Faculty — view a student's progress
+router.get("/institute/student/:id", protectInstitute, authorizeRoles("institute", "faculty"), getStudentProgress);
 
 module.exports = router;

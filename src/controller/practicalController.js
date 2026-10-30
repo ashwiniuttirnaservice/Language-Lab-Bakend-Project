@@ -6,6 +6,7 @@ const Student = require("../models/Student");
 const asyncHandler = require("../middlewares/asyncHandler");
 const { sendResponse, sendError } = require("../utils/apiResponse");
 const uploadToAws = require("../utils/awsUpload");
+const { getTeacherAssignedCourseIds, isCourseAllowed, buildTeacherStudentScope, isBatchAllowed } = require("../utils/teacherAccess");
 
 const ALLOWED_ATTACHMENT_MIMES = {
   "image/jpeg": "image",
@@ -65,6 +66,18 @@ const create = asyncHandler(async (req, res) => {
     );
   }
 
+  if (req.teacher) {
+    const allowedCourseIds = await getTeacherAssignedCourseIds(req.teacher);
+    if (!isCourseAllowed(course_id, allowedCourseIds)) {
+      return sendError(
+        res,
+        403,
+        false,
+        "You are not assigned to instruct this course.",
+      );
+    }
+  }
+
   const { error: attachmentError, attachment_type } = validateAttachment(
     req.file,
   );
@@ -100,7 +113,33 @@ const getAll = asyncHandler(async (req, res) => {
     institute_id: new Types.ObjectId(req.institute._id),
     is_deleted: false,
   };
-  if (req.query.courseId) match.course_id = new Types.ObjectId(req.query.courseId);
+
+  if (req.teacher) {
+    const allowedCourseIds = await getTeacherAssignedCourseIds(req.teacher);
+    if (!allowedCourseIds || allowedCourseIds.length === 0) {
+      return sendResponse(res, 200, true, "Practical questions fetched successfully.", {
+        total: 0,
+        page: Number(req.query.page) || 1,
+        limit: Number(req.query.limit) || 20,
+        practicals: [],
+      });
+    }
+
+    if (req.query.courseId) {
+      const requestedId = req.query.courseId.toString();
+      const isAllowed = allowedCourseIds.some((id) => id.toString() === requestedId);
+      if (!isAllowed) {
+        match.course_id = new Types.ObjectId(); // forces empty result
+      } else {
+        match.course_id = new Types.ObjectId(req.query.courseId);
+      }
+    } else {
+      match.course_id = { $in: allowedCourseIds };
+    }
+  } else if (req.query.courseId) {
+    match.course_id = new Types.ObjectId(req.query.courseId);
+  }
+
   if (req.query.topicId) match.topic_id = new Types.ObjectId(req.query.topicId);
 
   const page = Math.max(1, Number(req.query.page) || 1);
@@ -137,6 +176,18 @@ const getOne = asyncHandler(async (req, res) => {
 
   if (!practical) return sendError(res, 404, false, "Practical question not found.");
 
+  if (req.teacher) {
+    const allowedCourseIds = await getTeacherAssignedCourseIds(req.teacher);
+    if (!isCourseAllowed(practical.course_id?._id || practical.course_id, allowedCourseIds)) {
+      return sendError(
+        res,
+        403,
+        false,
+        "You do not have access to practical manuals for this course.",
+      );
+    }
+  }
+
   return sendResponse(res, 200, true, "Practical question fetched successfully.", practical);
 });
 
@@ -163,6 +214,19 @@ const update = asyncHandler(async (req, res) => {
         "This course has not been downloaded by your institute yet.",
       );
     }
+
+    if (req.teacher) {
+      const allowedCourseIds = await getTeacherAssignedCourseIds(req.teacher);
+      if (!isCourseAllowed(course_id, allowedCourseIds)) {
+        return sendError(
+          res,
+          403,
+          false,
+          "You are not assigned to instruct this course.",
+        );
+      }
+    }
+
     practical.course_id = course_id;
   }
   if (topic_id !== undefined) practical.topic_id = topic_id;
@@ -208,6 +272,39 @@ const assign = asyncHandler(async (req, res) => {
   });
   if (!practical) return sendError(res, 404, false, "Practical question not found.");
 
+  if (req.teacher) {
+    const allowedCourseIds = await getTeacherAssignedCourseIds(req.teacher);
+    if (!isCourseAllowed(practical.course_id, allowedCourseIds)) {
+      return sendError(
+        res,
+        403,
+        false,
+        "You do not have access to assign practical manuals for this course.",
+      );
+    }
+
+    const hasDepartments = req.teacher.assigned_departments?.length > 0;
+    const hasBatches = req.teacher.assigned_batches?.length > 0;
+    const { segment, year } = req.body;
+
+    if (hasDepartments && !req.teacher.assigned_departments.includes(segment)) {
+      return sendError(
+        res,
+        403,
+        false,
+        "You cannot assign manuals to departments outside your scope.",
+      );
+    }
+    if (hasBatches && !isBatchAllowed(req.teacher, segment, year)) {
+      return sendError(
+        res,
+        403,
+        false,
+        "You cannot assign manuals to batches outside your scope.",
+      );
+    }
+  }
+
   const { segment, year } = req.body;
 
   const alreadyAssigned = practical.assigned_batches.some(
@@ -227,15 +324,25 @@ const assign = asyncHandler(async (req, res) => {
 // and query as studentLearningAccessController.getDepartments, backing the
 // Department/Batch selects on the Assign Practical Manual form.
 const getDepartments = asyncHandler(async (req, res) => {
+  const match = {
+    institute_id: new Types.ObjectId(req.institute._id),
+    status: "active",
+    segment: { $nin: [null, ""] },
+    year: { $ne: null },
+  };
+
+  if (req.teacher) {
+    const scope = buildTeacherStudentScope(req.teacher);
+    if (scope) {
+      if (scope._id && scope._id.$in && scope._id.$in.length === 0) {
+        return sendResponse(res, 200, true, "Departments and batches fetched.", []);
+      }
+      Object.assign(match, scope);
+    }
+  }
+
   const groups = await Student.aggregate([
-    {
-      $match: {
-        institute_id: new Types.ObjectId(req.institute._id),
-        status: "active",
-        segment: { $nin: [null, ""] },
-        year: { $ne: null },
-      },
-    },
+    { $match: match },
     {
       $group: {
         _id: { segment: "$segment", year: "$year" },
@@ -269,8 +376,20 @@ const getSubmissions = asyncHandler(async (req, res) => {
     _id: req.params.id,
     institute_id: req.institute._id,
     is_deleted: false,
-  }).select("_id");
+  }).select("_id course_id");
   if (!practical) return sendError(res, 404, false, "Practical question not found.");
+
+  if (req.teacher) {
+    const allowedCourseIds = await getTeacherAssignedCourseIds(req.teacher);
+    if (!isCourseAllowed(practical.course_id, allowedCourseIds)) {
+      return sendError(
+        res,
+        403,
+        false,
+        "You do not have access to submissions for this course.",
+      );
+    }
+  }
 
   const submissions = await PracticalSubmission.find({ practical_id: practical._id })
     .populate("student_id", "full_name enrollment_no")
@@ -288,8 +407,20 @@ const gradeSubmission = asyncHandler(async (req, res) => {
   const practical = await Practical.findOne({
     _id: req.params.id,
     institute_id: req.institute._id,
-  }).select("_id");
+  }).select("_id course_id");
   if (!practical) return sendError(res, 404, false, "Practical question not found.");
+
+  if (req.teacher) {
+    const allowedCourseIds = await getTeacherAssignedCourseIds(req.teacher);
+    if (!isCourseAllowed(practical.course_id, allowedCourseIds)) {
+      return sendError(
+        res,
+        403,
+        false,
+        "You do not have access to grade submissions for this course.",
+      );
+    }
+  }
 
   const submission = await PracticalSubmission.findOne({
     _id: req.params.submissionId,
@@ -311,12 +442,27 @@ const gradeSubmission = asyncHandler(async (req, res) => {
 
 // DELETE /practical/:id
 const remove = asyncHandler(async (req, res) => {
-  const practical = await Practical.findOneAndUpdate(
-    { _id: req.params.id, institute_id: req.institute._id, is_deleted: false },
-    { $set: { is_deleted: true } },
-    { new: true },
-  );
+  const practical = await Practical.findOne({
+    _id: req.params.id,
+    institute_id: req.institute._id,
+    is_deleted: false,
+  });
   if (!practical) return sendError(res, 404, false, "Practical question not found.");
+
+  if (req.teacher) {
+    const allowedCourseIds = await getTeacherAssignedCourseIds(req.teacher);
+    if (!isCourseAllowed(practical.course_id, allowedCourseIds)) {
+      return sendError(
+        res,
+        403,
+        false,
+        "You do not have access to delete practical manuals for this course.",
+      );
+    }
+  }
+
+  practical.is_deleted = true;
+  await practical.save();
 
   return sendResponse(res, 200, true, "Practical question deleted successfully.");
 });

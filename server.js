@@ -88,6 +88,12 @@ const taskSubmissionsDir = express.static(
 app.use("/media/task-submissions", serveDownloadedMedia, taskSubmissionsDir);
 app.use("/api/media/task-submissions", serveDownloadedMedia, taskSubmissionsDir);
 
+const interactiveAudioDir = express.static(
+  path.join(__dirname, "uploads", "interactive-learning"),
+);
+app.use("/media/interactive-learning", serveDownloadedMedia, interactiveAudioDir);
+app.use("/api/media/interactive-learning", serveDownloadedMedia, interactiveAudioDir);
+
 app.use("/api", require("./src/index"));
 
 app.use(require("./src/middlewares/errorHandler"));

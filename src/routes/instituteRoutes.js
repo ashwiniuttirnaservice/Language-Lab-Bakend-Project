@@ -46,6 +46,15 @@ const {
 
 const { getByInstitute } = require("../controller/licenseBatchController");
 
+const {
+  getTeachers,
+  createTeacher,
+  updateTeacher,
+  deleteTeacher,
+  toggleTeacherStatus,
+  resetTeacherPassword,
+} = require("../controller/teacherController");
+
 const studentLearningAccessRoutes = require("./studentLearningAccessRoutes");
 
 const {
@@ -102,25 +111,30 @@ router.get(
   getOneCourse,
 );
 
-// ── Institute (self) ──────────────────────────────────────────────────────────
-router.post("/logout", protectInstitute, authorizeRoles("institute"), logout);
-router.get("/me", protectInstitute, authorizeRoles("institute"), getMe);
+// ── Institute & Faculty (self) ────────────────────────────────────────────────
+router.post(
+  "/logout",
+  protectInstitute,
+  authorizeRoles("institute", "faculty"),
+  logout,
+);
+router.get("/me", protectInstitute, authorizeRoles("institute", "faculty"), getMe);
 router.get(
   "/me/dashboard",
   protectInstitute,
-  authorizeRoles("institute"),
+  authorizeRoles("institute", "faculty"),
   getDashboard,
 );
 router.get(
   "/active-students-count",
   protectInstitute,
-  authorizeRoles("institute"),
+  authorizeRoles("institute", "faculty"),
   getActiveStudentsCount,
 );
 router.get(
   "/me/courses",
   protectInstitute,
-  authorizeRoles("institute"),
+  authorizeRoles("institute", "faculty"),
   getPurchasedCourses,
 );
 router.get(
@@ -140,7 +154,7 @@ router.get(
 router.get(
   "/me/courses/:courseId/download-status",
   protectInstitute,
-  authorizeRoles("institute"),
+  authorizeRoles("institute", "faculty"),
   getCourseDownloadStatus,
 );
 router.get(
@@ -176,65 +190,103 @@ router.put(
   updateMe,
 );
 
-// ── Institute: per-student reports (Student Statistics tabs) ──────────────────
+// ── Institute & Faculty: per-student reports (Student Statistics tabs) ────────
 router.get(
   "/students/:id/topic-details",
   protectInstitute,
-  authorizeRoles("institute"),
+  authorizeRoles("institute", "faculty"),
   getTopicDetails,
 );
 router.get(
   "/students/:id/exercise-report",
   protectInstitute,
-  authorizeRoles("institute"),
+  authorizeRoles("institute", "faculty"),
   getExerciseReport,
 );
 router.get(
   "/students/:id/practical-report",
   protectInstitute,
-  authorizeRoles("institute"),
+  authorizeRoles("institute", "faculty"),
   getPracticalReport,
 );
 router.get(
   "/students/:id/task-report",
   protectInstitute,
-  authorizeRoles("institute"),
+  authorizeRoles("institute", "faculty"),
   getTaskReport,
 );
 router.get(
   "/students/:id/progress-report",
   protectInstitute,
-  authorizeRoles("institute"),
+  authorizeRoles("institute", "faculty"),
   getProgressReport,
 );
 router.get(
   "/students/:id/activity-summary",
   protectInstitute,
-  authorizeRoles("institute"),
+  authorizeRoles("institute", "faculty"),
   getStudentActivitySummary,
 );
 router.get(
   "/students/:id/activity-history",
   protectInstitute,
-  authorizeRoles("institute"),
+  authorizeRoles("institute", "faculty"),
   getStudentActivityHistory,
 );
 
 // ── Institute: Student Learning Access (course/topic/subtopic → segment+year) ─
 router.use("/student-learning-access", studentLearningAccessRoutes);
 
-// ── Institute: activity log (Student Activity Log) ────────────────────────────
+// ── Institute & Faculty: activity log (Student Activity Log) ──────────────────
 router.get(
   "/activity-log/export",
   protectInstitute,
-  authorizeRoles("institute"),
+  authorizeRoles("institute", "faculty"),
   exportActivityLog,
 );
 router.get(
   "/activity-log",
   protectInstitute,
-  authorizeRoles("institute"),
+  authorizeRoles("institute", "faculty"),
   getActivityLog,
+);
+
+// ── Institute: Faculty / Teacher Management ──────────────────────────────────
+router.get(
+  "/teachers",
+  protectInstitute,
+  authorizeRoles("institute"),
+  getTeachers,
+);
+router.post(
+  "/teachers",
+  protectInstitute,
+  authorizeRoles("institute"),
+  createTeacher,
+);
+router.put(
+  "/teachers/:id",
+  protectInstitute,
+  authorizeRoles("institute"),
+  updateTeacher,
+);
+router.delete(
+  "/teachers/:id",
+  protectInstitute,
+  authorizeRoles("institute"),
+  deleteTeacher,
+);
+router.patch(
+  "/teachers/:id/toggle-status",
+  protectInstitute,
+  authorizeRoles("institute"),
+  toggleTeacherStatus,
+);
+router.post(
+  "/teachers/:id/reset-password",
+  protectInstitute,
+  authorizeRoles("institute"),
+  resetTeacherPassword,
 );
 
 // ── Super Admin ───────────────────────────────────────────────────────────────

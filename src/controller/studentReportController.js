@@ -10,6 +10,7 @@ const PracticalSubmission = require("../models/PracticalSubmission");
 const Task = require("../models/Task");
 const TaskSubmission = require("../models/TaskSubmission");
 const asyncHandler = require("../middlewares/asyncHandler");
+const { isBatchAllowed } = require("../utils/teacherAccess");
 const { sendResponse, sendError } = require("../utils/apiResponse");
 
 // Shared guard for all four report endpoints below — every one of them is
@@ -22,6 +23,33 @@ async function loadOwnedStudent(req) {
     return {
       error: { code: 403, message: "This student does not belong to your institute." },
     };
+  }
+  if (req.teacher) {
+    const hasDepartments = req.teacher.assigned_departments?.length > 0;
+    const hasBatches = req.teacher.assigned_batches?.length > 0;
+
+    if (!hasDepartments && !hasBatches) {
+      return {
+        error: {
+          code: 403,
+          message: "You do not have any assigned departments or batches.",
+        },
+      };
+    }
+
+    if (
+      hasDepartments &&
+      !req.teacher.assigned_departments.includes(student.segment)
+    ) {
+      return {
+        error: { code: 403, message: "This student is outside your assigned department(s)." },
+      };
+    }
+    if (hasBatches && !isBatchAllowed(req.teacher, student.segment, student.year)) {
+      return {
+        error: { code: 403, message: "This student is outside your assigned batch(es)." },
+      };
+    }
   }
   return { student };
 }
