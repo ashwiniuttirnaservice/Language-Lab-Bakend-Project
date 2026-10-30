@@ -68,6 +68,16 @@ const InteractiveTaskSchema = new Schema(
       type: Number,
       default: null,
     },
+    assigned_batches: {
+      type: [
+        {
+          segment: { type: String, required: true, trim: true },
+          year: { type: Number, required: true },
+          _id: false,
+        },
+      ],
+      default: [],
+    },
 
     created_by_role: {
       type: String,

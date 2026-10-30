@@ -292,11 +292,7 @@ const remove = asyncHandler(async (req, res) => {
 
 // PUT /api/interactive-task/:id/assign
 const assignTask = asyncHandler(async (req, res) => {
-  const { department, batch } = req.body;
-
-  if (!department) {
-    return sendError(res, 400, false, "Department/Branch is required.");
-  }
+  const { department, batch, assignments } = req.body;
 
   const task = await InteractiveTask.findOne({
     _id: req.params.id,
@@ -306,6 +302,58 @@ const assignTask = asyncHandler(async (req, res) => {
 
   if (!task) {
     return sendError(res, 404, false, "Interactive task not found.");
+  }
+
+  // Handle array of assignments (bulk / multi-batch)
+  if (Array.isArray(assignments) && assignments.length > 0) {
+    if (req.teacher) {
+      const teacherBranches = (req.teacher.assigned_departments || []).map((b) =>
+        b.toLowerCase().trim(),
+      );
+      for (const item of assignments) {
+        const seg = (item.segment || item.department || "").toLowerCase().trim();
+        if (!teacherBranches.includes(seg)) {
+          return sendError(
+            res,
+            403,
+            false,
+            `Access denied. You can only assign tasks to your assigned branches (${(req.teacher.assigned_departments || []).join(", ")}).`,
+          );
+        }
+        if (item.year && req.teacher.assigned_batches && req.teacher.assigned_batches.length > 0) {
+          if (!isBatchAllowed(req.teacher, item.segment || item.department, item.year)) {
+            return sendError(
+              res,
+              403,
+              false,
+              `Access denied. You can only assign tasks to your assigned batches (${req.teacher.assigned_batches.join(", ")}).`,
+            );
+          }
+        }
+      }
+    }
+
+    const cleanAssignments = assignments.map((a) => ({
+      segment: (a.segment || a.department).trim(),
+      year: Number(a.year),
+    }));
+
+    task.assigned_batches = cleanAssignments;
+    task.assigned_department = cleanAssignments[0]?.segment || null;
+    task.assigned_batch = cleanAssignments.length === 1 ? cleanAssignments[0]?.year : null;
+    await task.save();
+
+    return sendResponse(
+      res,
+      200,
+      true,
+      `Task successfully assigned to ${cleanAssignments.length} batch(es).`,
+      task,
+    );
+  }
+
+  if (!department) {
+    return sendError(res, 400, false, "Department/Branch is required.");
   }
 
   // Role constraint:
@@ -338,6 +386,7 @@ const assignTask = asyncHandler(async (req, res) => {
 
   task.assigned_department = department.trim();
   task.assigned_batch = batch ? parseInt(batch, 10) : null;
+  task.assigned_batches = batch ? [{ segment: department.trim(), year: parseInt(batch, 10) }] : [];
   await task.save();
 
   return sendResponse(
@@ -400,20 +449,32 @@ const getStudentTasks = asyncHandler(async (req, res) => {
   }
 
   // Branch & batch access condition:
-  // Visible if task has no assigned department (all branches) OR matches student.segment
-  filter.$and = [
+  // Visible if task has no assigned department (all branches) OR matches student.segment OR matches assigned_batches
+  filter.$or = [
     {
-      $or: [
-        { assigned_department: null },
-        { assigned_department: "" },
-        { assigned_department: student.segment },
+      $and: [
+        {
+          $or: [
+            { assigned_department: null },
+            { assigned_department: "" },
+            { assigned_department: student.segment },
+          ],
+        },
+        {
+          $or: [
+            { assigned_batch: null },
+            { assigned_batch: student.year },
+          ],
+        },
       ],
     },
     {
-      $or: [
-        { assigned_batch: null },
-        { assigned_batch: student.year },
-      ],
+      assigned_batches: {
+        $elemMatch: {
+          segment: student.segment,
+          year: student.year,
+        },
+      },
     },
   ];
 

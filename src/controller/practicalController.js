@@ -272,6 +272,18 @@ const assign = asyncHandler(async (req, res) => {
   });
   if (!practical) return sendError(res, 404, false, "Practical question not found.");
 
+  const rawList = Array.isArray(req.body.assignments)
+    ? req.body.assignments
+    : Array.isArray(req.body.batches)
+    ? req.body.batches
+    : req.body.segment && req.body.year !== undefined
+    ? [{ segment: req.body.segment, year: req.body.year }]
+    : [];
+
+  if (rawList.length === 0) {
+    return sendError(res, 400, false, "Please specify at least one department and batch to assign.");
+  }
+
   if (req.teacher) {
     const allowedCourseIds = await getTeacherAssignedCourseIds(req.teacher);
     if (!isCourseAllowed(practical.course_id, allowedCourseIds)) {
@@ -285,35 +297,39 @@ const assign = asyncHandler(async (req, res) => {
 
     const hasDepartments = req.teacher.assigned_departments?.length > 0;
     const hasBatches = req.teacher.assigned_batches?.length > 0;
-    const { segment, year } = req.body;
 
-    if (hasDepartments && !req.teacher.assigned_departments.includes(segment)) {
-      return sendError(
-        res,
-        403,
-        false,
-        "You cannot assign manuals to departments outside your scope.",
-      );
-    }
-    if (hasBatches && !isBatchAllowed(req.teacher, segment, year)) {
-      return sendError(
-        res,
-        403,
-        false,
-        "You cannot assign manuals to batches outside your scope.",
-      );
+    for (const item of rawList) {
+      if (hasDepartments && !req.teacher.assigned_departments.includes(item.segment)) {
+        return sendError(
+          res,
+          403,
+          false,
+          `You cannot assign manuals to department "${item.segment}" outside your scope.`,
+        );
+      }
+      if (hasBatches && !isBatchAllowed(req.teacher, item.segment, item.year)) {
+        return sendError(
+          res,
+          403,
+          false,
+          `You cannot assign manuals to batch ${item.year} (${item.segment}) outside your scope.`,
+        );
+      }
     }
   }
 
-  const { segment, year } = req.body;
-
-  const alreadyAssigned = practical.assigned_batches.some(
-    (b) => b.segment === segment && b.year === year,
-  );
-  if (!alreadyAssigned) {
-    practical.assigned_batches.push({ segment, year });
-    await practical.save();
+  for (const item of rawList) {
+    const segment = String(item.segment).trim();
+    const year = Number(item.year);
+    const alreadyAssigned = practical.assigned_batches.some(
+      (b) => b.segment === segment && b.year === year,
+    );
+    if (!alreadyAssigned) {
+      practical.assigned_batches.push({ segment, year });
+    }
   }
+
+  await practical.save();
 
   return sendResponse(res, 200, true, "Practical manual assigned successfully.", practical);
 });
