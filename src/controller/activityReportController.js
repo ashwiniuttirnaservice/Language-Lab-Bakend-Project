@@ -11,6 +11,7 @@ const PracticalSubmission = require("../models/PracticalSubmission");
 const Task = require("../models/Task");
 const TaskSubmission = require("../models/TaskSubmission");
 const asyncHandler = require("../middlewares/asyncHandler");
+const { buildTeacherStudentScope } = require("../utils/teacherAccess");
 const { sendResponse, sendError } = require("../utils/apiResponse");
 const { loadOwnedStudent, resolveCourseTopicIds } = require("./studentReportController");
 
@@ -64,8 +65,19 @@ async function buildActivityRows(req) {
     },
   ]);
 
+  const studentFilter = {
+    _id: { $in: perStudent.map((p) => p._id) },
+    institute_id: instituteId,
+  };
+  if (req.teacher) {
+    const scope = buildTeacherStudentScope(req.teacher);
+    if (scope) {
+      Object.assign(studentFilter, scope);
+    }
+  }
+
   const students = await Student.find(
-    { _id: { $in: perStudent.map((p) => p._id) }, institute_id: instituteId },
+    studentFilter,
     "full_name enrollment_no last_login",
   ).lean();
   const studentMap = {};

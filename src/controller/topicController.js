@@ -52,6 +52,32 @@ const getAll = asyncHandler(async (req, res) => {
       const assignedIds = course?.topic_ids || [];
       matchStage._id = { $in: assignedIds.map((id) => new Types.ObjectId(id)) };
     }
+  } else if (req.teacher) {
+    const { getTeacherAssignedCourseIds, isCourseAllowed } = require("../utils/teacherAccess");
+    const allowedCourseIds = await getTeacherAssignedCourseIds(req.teacher);
+    if (!allowedCourseIds || allowedCourseIds.length === 0) {
+      return sendResponse(res, 200, true, "Topics fetched successfully.", []);
+    }
+
+    const { course_id } = req.query;
+    if (course_id) {
+      if (!isCourseAllowed(course_id, allowedCourseIds)) {
+        return sendError(res, 403, false, "You are not assigned to instruct this course.");
+      }
+      const course = await Course.findById(course_id).select("topic_ids");
+      const assignedIds = course?.topic_ids || [];
+      matchStage._id = { $in: assignedIds.map((id) => new Types.ObjectId(id)) };
+    } else {
+      const courses = await Course.find(
+        { _id: { $in: allowedCourseIds }, is_active: true },
+        { topic_ids: 1 },
+      ).lean();
+      const allTopicIds = new Set();
+      courses.forEach((c) => {
+        (c.topic_ids || []).forEach((tId) => allTopicIds.add(tId.toString()));
+      });
+      matchStage._id = { $in: Array.from(allTopicIds).map((id) => new Types.ObjectId(id)) };
+    }
   } else if (req.institute) {
     // Institute admin (Settings → Course Content) — same source of truth as
     // getCourseModuleCount: the course's own topic_ids, not download-gated,
@@ -225,6 +251,23 @@ const getOne = asyncHandler(async (req, res) => {
     });
     if (grantedSubtopicIds) {
       subtopicsMatch._id = { $in: [...grantedSubtopicIds].map((id) => new Types.ObjectId(id)) };
+    }
+  }
+
+  if (req.teacher) {
+    const { getTeacherAssignedCourseIds } = require("../utils/teacherAccess");
+    const allowedCourseIds = await getTeacherAssignedCourseIds(req.teacher);
+    if (!allowedCourseIds || allowedCourseIds.length === 0) {
+      return sendError(res, 403, false, "You do not have access to this topic.");
+    }
+    const courseWithTopic = await Course.findOne({
+      _id: { $in: allowedCourseIds },
+      topic_ids: new Types.ObjectId(req.params.id),
+      is_active: true,
+    }).select("_id");
+
+    if (!courseWithTopic) {
+      return sendError(res, 403, false, "You do not have access to this topic.");
     }
   }
 

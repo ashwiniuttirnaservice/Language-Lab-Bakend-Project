@@ -47,6 +47,24 @@ const getByTopic = asyncHandler(async (req, res) => {
     }
   }
 
+  if (req.teacher) {
+    const { getTeacherAssignedCourseIds } = require("../utils/teacherAccess");
+    const Course = require("../models/Course");
+    const allowedCourseIds = await getTeacherAssignedCourseIds(req.teacher);
+    if (!allowedCourseIds || allowedCourseIds.length === 0) {
+      return sendResponse(res, 200, true, "SubTopics fetched successfully.", []);
+    }
+    const courseWithTopic = await Course.findOne({
+      _id: { $in: allowedCourseIds },
+      topic_ids: new Types.ObjectId(req.params.topicId),
+      is_active: true,
+    }).select("_id");
+
+    if (!courseWithTopic) {
+      return sendError(res, 403, false, "You do not have access to subtopics for this topic.");
+    }
+  }
+
   const subtopics = await SubTopic.aggregate([
     { $match: matchStage },
     { $sort: { order: 1, createdAt: 1 } },

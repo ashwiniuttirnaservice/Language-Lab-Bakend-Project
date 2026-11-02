@@ -2,7 +2,8 @@ const { sendError } = require("../utils/apiResponse");
 
 const authorizeRoles = (...roles) => {
   return (req, res, next) => {
-    const currentUser = req.admin || req.institute || req.editor || req.student;
+    const currentUser =
+      req.teacher || req.admin || req.institute || req.editor || req.student;
 
     if (!currentUser) {
       return sendError(res, 401, false, "Unauthorized access.");

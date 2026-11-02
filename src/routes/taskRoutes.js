@@ -82,7 +82,7 @@ router.post(
   submitMine,
 );
 
-router.use(protectInstitute, authorizeRoles("institute"));
+router.use(protectInstitute, authorizeRoles("institute", "faculty"));
 
 router.post(
   "/",

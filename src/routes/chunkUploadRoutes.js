@@ -9,7 +9,7 @@ const { initUpload, uploadChunk, getStatus, completeUpload } = require("../contr
 // Any authenticated uploader role — matches the set of roles that already
 // upload files elsewhere in the app (editors: video/audio/profile photo,
 // institutes: logo, super admins: profile image, students: profile photo).
-const allowUploaders = authorizeRoles("editor", "institute", "super_admin", "student");
+const allowUploaders = authorizeRoles("editor", "institute", "super_admin", "student", "faculty");
 
 router.post("/init", protectUser, allowUploaders, initUpload);
 router.get("/:uploadId/status", protectUser, allowUploaders, getStatus);

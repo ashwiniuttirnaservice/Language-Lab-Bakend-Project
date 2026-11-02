@@ -108,9 +108,21 @@ const submitTaskSchema = Joi.object({
 // Same "department"/"batch" vocabulary as practicalValidation's
 // assignPracticalSchema — segment = department, year = batch.
 const assignTaskSchema = Joi.object({
-  segment: Joi.string().trim().min(1).max(120).required(),
-  year: Joi.number().integer().min(1).max(6).required(),
-});
+  segment: Joi.string().trim().min(1).max(120),
+  year: Joi.number().integer().min(1).max(6),
+  assignments: Joi.array().items(
+    Joi.object({
+      segment: Joi.string().trim().min(1).max(120).required(),
+      year: Joi.number().integer().min(1).max(6).required(),
+    })
+  ),
+  batches: Joi.array().items(
+    Joi.object({
+      segment: Joi.string().trim().min(1).max(120).required(),
+      year: Joi.number().integer().min(1).max(6).required(),
+    })
+  ),
+}).or('segment', 'assignments', 'batches');
 
 module.exports = {
   createTaskSchema,

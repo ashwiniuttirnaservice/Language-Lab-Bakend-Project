@@ -92,6 +92,14 @@ const getCourseModuleCount = asyncHandler(async (req, res) => {
 
   const topicIds = course.topic_ids;
 
+  if (req.teacher) {
+    const { getTeacherAssignedCourseIds, isCourseAllowed } = require("../utils/teacherAccess");
+    const allowedCourseIds = await getTeacherAssignedCourseIds(req.teacher);
+    if (!isCourseAllowed(course._id, allowedCourseIds)) {
+      return sendError(res, 403, false, "You are not assigned to instruct this course.");
+    }
+  }
+
   // Find all active subtopics linked to those topics
   const subTopics = await SubTopic.find(
     { topic_id: { $in: topicIds }, is_active: true },

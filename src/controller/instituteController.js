@@ -41,6 +41,7 @@ const {
   syncSubjectsFromMaster,
 } = require("../service/masterSyncService");
 const logger = require("../utils/logger");
+const { buildTeacherStudentScope } = require("../utils/teacherAccess");
 
 // POST /institute
 const create = asyncHandler(async (req, res) => {
@@ -436,8 +437,59 @@ const assignLicense = asyncHandler(async (req, res) => {
 const login = asyncHandler(async (req, res) => {
   const jwt = require("jsonwebtoken");
   const { email, password } = req.body;
+  const normalizedEmail = (email || "").toLowerCase().trim();
 
-  let institute = await Institute.findOne({ email }).select("+password");
+  // 1. Check if this login belongs to a local Faculty / Teacher member first.
+  // Faculty accounts only exist on this local institute server, so checking them
+  // first prevents firing unnecessary master sync requests that predictably 401.
+  const Teacher = require("../models/Teacher");
+  const teacher = await Teacher.findOne({ email: normalizedEmail });
+
+  if (teacher) {
+    const isMatch = await teacher.comparePassword(password);
+    if (!isMatch) {
+      return sendError(res, 401, false, "Invalid email or password.");
+    }
+
+    if (teacher.status !== "active") {
+      return sendError(res, 403, false, "Faculty account is inactive.");
+    }
+
+    teacher.last_login = new Date();
+    await teacher.save();
+
+    const inst = await Institute.findById(teacher.institute_id).select(
+      "institute_name logo institute_code",
+    );
+
+    const token = jwt.sign(
+      { id: teacher._id, institute_id: teacher.institute_id, role: "faculty" },
+      process.env.JWT_SECRET,
+      { expiresIn: process.env.JWT_EXPIRES_IN || "7d" },
+    );
+
+    return sendResponse(res, 200, true, "Faculty login successful.", {
+      token,
+      role: "faculty",
+      faculty: {
+        id: teacher._id,
+        full_name: teacher.full_name,
+        email: teacher.email,
+        phone: teacher.phone,
+        institute_id: teacher.institute_id,
+        institute_name: inst?.institute_name,
+        institute_code: inst?.institute_code,
+        logo: inst?.logo,
+        assigned_departments: teacher.assigned_departments,
+        assigned_batches: teacher.assigned_batches,
+        assigned_courses: teacher.assigned_courses,
+        status: teacher.status,
+      },
+    });
+  }
+
+  // 2. Check for local Institute record
+  let institute = await Institute.findOne({ email: normalizedEmail }).select("+password");
 
   // First-ever local login on a standalone deployment: no local Institute
   // row exists yet for this email. Mirror it down from master and retry
@@ -449,7 +501,7 @@ const login = asyncHandler(async (req, res) => {
       // Preferred path (see syncInstituteFromMaster's comment) — needs
       // GET /api/sync/institute + SYNC_API_KEY on the master deployment.
       await syncInstituteFromMaster();
-      institute = await Institute.findOne({ email }).select("+password");
+      institute = await Institute.findOne({ email: normalizedEmail }).select("+password");
     } catch (error) {
       logger.error(`Institute sync-on-login failed for ${email}: ${error.message}`);
     }
@@ -460,14 +512,16 @@ const login = asyncHandler(async (req, res) => {
     if (!institute) {
       try {
         await syncInstituteFromPublicLogin(email, password);
-        institute = await Institute.findOne({ email }).select("+password");
+        institute = await Institute.findOne({ email: normalizedEmail }).select("+password");
       } catch (error) {
         logger.error(`Institute sync-on-login (public fallback) failed for ${email}: ${error.message}`);
       }
     }
   }
 
-  if (!institute) return sendError(res, 401, false, "Invalid email or password.");
+  if (!institute) {
+    return sendError(res, 401, false, "Invalid email or password.");
+  }
 
   const isMatch = await bcrypt.compare(password, institute.password);
   if (!isMatch) return sendError(res, 401, false, "Invalid email or password.");
@@ -498,6 +552,19 @@ const login = asyncHandler(async (req, res) => {
 // Reads from the institute's own local database, not the master.
 const getMe = asyncHandler(async (req, res) => {
   const { Types } = require("mongoose");
+
+  if (req.teacher) {
+    const inst = await Institute.findById(req.teacher.institute_id).select(
+      "institute_name logo institute_code address",
+    );
+    return sendResponse(res, 200, true, "Profile fetched successfully.", {
+      ...req.teacher,
+      institute_name: inst?.institute_name,
+      logo: inst?.logo,
+      institute_code: inst?.institute_code,
+      role: "faculty",
+    });
+  }
 
   const [institute] = await Institute.aggregate([
     { $match: { _id: new Types.ObjectId(req.institute._id) } },
@@ -619,9 +686,23 @@ const getPurchasedCourses = asyncHandler(async (req, res) => {
     is_downloaded: downloadedSet.has(course._id.toString()),
   }));
 
+  let filteredCourses = courses;
+  if (req.teacher) {
+    const { getTeacherAssignedCourseIds } = require("../utils/teacherAccess");
+    const allowedIds = await getTeacherAssignedCourseIds(req.teacher);
+    if (!allowedIds || allowedIds.length === 0) {
+      return sendResponse(res, 200, true, "Purchased courses fetched.", {
+        total: 0,
+        courses: [],
+      });
+    }
+    const allowedSet = new Set(allowedIds.map((id) => id.toString()));
+    filteredCourses = courses.filter((c) => allowedSet.has(c._id.toString()));
+  }
+
   return sendResponse(res, 200, true, "Purchased courses fetched.", {
-    total: courses.length,
-    courses,
+    total: filteredCourses.length,
+    courses: filteredCourses,
   });
 });
 
@@ -639,6 +720,15 @@ const getDashboard = asyncHandler(async (req, res) => {
   const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
   const fiveMinutesAgo = new Date(now.getTime() - 5 * 60 * 1000);
 
+  // If faculty member, scope student queries to their assigned departments and batches
+  const studentMatch = { institute_id: instituteId };
+  if (req.teacher) {
+    const scope = buildTeacherStudentScope(req.teacher);
+    if (scope) {
+      Object.assign(studentMatch, scope);
+    }
+  }
+
   const [
     totalStudents,
     newStudentsThisWeek,
@@ -649,17 +739,17 @@ const getDashboard = asyncHandler(async (req, res) => {
     onlineCount,
     activeStudents,
   ] = await Promise.all([
-    Student.countDocuments({ institute_id: instituteId }),
-    Student.countDocuments({ institute_id: instituteId, createdAt: { $gte: weekAgo } }),
+    Student.countDocuments(studentMatch),
+    Student.countDocuments({ ...studentMatch, createdAt: { $gte: weekAgo } }),
     Student.aggregate([
-      { $match: { institute_id: instituteId } },
+      { $match: studentMatch },
       { $group: { _id: "$status", count: { $sum: 1 } } },
     ]),
     Course.countDocuments({
-      _id: { $in: institute.downloaded_course_ids },
+      _id: { $in: institute.downloaded_course_ids || [] },
       is_active: true,
     }),
-    License.find({ _id: { $in: institute.license_ids } }).select(
+    License.find({ _id: { $in: institute.license_ids || [] } }).select(
       "status total_seats active_sessions",
     ),
     StudentProgress.aggregate([
@@ -673,11 +763,11 @@ const getDashboard = asyncHandler(async (req, res) => {
       },
     ]),
     Student.countDocuments({
-      institute_id: instituteId,
+      ...studentMatch,
       last_seen_at: { $gte: fiveMinutesAgo },
     }),
     Student.find({
-      institute_id: instituteId,
+      ...studentMatch,
       last_seen_at: { $gte: fiveMinutesAgo },
     })
       .sort({ last_login: -1 })
@@ -766,10 +856,10 @@ const getDashboard = asyncHandler(async (req, res) => {
     },
     courses_licensed: {
       total: coursesLicensedCount,
-      licensed_total: institute.course_id.length,
+      licensed_total: institute.course_id?.length || 0,
     },
     license_usage: {
-      total_seats: totalSeats || institute.license_count,
+      total_seats: totalSeats || institute.license_count || 0,
       used_seats: usedSeats,
       active_licenses: activeLicenses,
     },
@@ -1503,10 +1593,24 @@ const verifyOtp = asyncHandler(async (req, res) => {
 const getActiveStudentsCount = asyncHandler(async (req, res) => {
   const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
 
-  const count = await Student.countDocuments({
+  const query = {
     institute_id: req.institute._id,
     last_seen_at: { $gte: fiveMinutesAgo },
-  });
+  };
+
+  if (req.teacher) {
+    const scope = buildTeacherStudentScope(req.teacher);
+    if (scope) {
+      if (scope._id && scope._id.$in && scope._id.$in.length === 0) {
+        return sendResponse(res, 200, true, "Active students count fetched successfully.", {
+          active_count: 0,
+        });
+      }
+      Object.assign(query, scope);
+    }
+  }
+
+  const count = await Student.countDocuments(query);
 
   return sendResponse(res, 200, true, "Active students count fetched successfully.", {
     active_count: count,
