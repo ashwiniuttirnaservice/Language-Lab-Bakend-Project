@@ -7,6 +7,10 @@ const Course = require("../models/Course");
 const License = require("../models/License");
 const Session = require("../models/Session");
 const asyncHandler = require("../middlewares/asyncHandler");
+const { isBatchAllowed } = require("../utils/teacherAccess");
+
+// In-memory messages buffer for prototype testing (NOT saved to MongoDB)
+const inMemoryConversationMessages = [];
 const { sendResponse, sendError } = require("../utils/apiResponse");
 const uploadToAws = require("../utils/awsUpload");
 const { bulkRowSchema } = require("../validation/studentValidation");
@@ -145,8 +149,69 @@ const getAllForAdmin = asyncHandler(async (req, res) => {
 // ── Institute: list students (optional ?segment= ?year= ?page= ?limit= filters) ─
 const getAll = asyncHandler(async (req, res) => {
   const matchStage = { institute_id: new Types.ObjectId(req.institute._id) };
-  if (req.query.segment) matchStage.segment = req.query.segment;
-  if (req.query.year) matchStage.year = Number(req.query.year);
+
+  // If request is made by a faculty member, scope students to their assigned departments and batches
+  if (req.teacher) {
+    const hasDepartments = req.teacher.assigned_departments?.length > 0;
+    const hasBatches = req.teacher.assigned_batches?.length > 0;
+
+    // If faculty has not been assigned to any department or batch yet, they have no assigned students
+    if (!hasDepartments && !hasBatches) {
+      const paginated =
+        req.query.page !== undefined || req.query.limit !== undefined;
+      return sendResponse(res, 200, true, "Students fetched successfully.", {
+        total: 0,
+        page: Number(req.query.page) || 1,
+        limit: Number(req.query.limit) || 50,
+        students: [],
+      });
+    }
+
+    const scopedBatchPairs = (req.teacher.assigned_batches || []).filter(
+      (b) => typeof b === "object" && b !== null && (b.department || b.segment)
+    );
+    if (scopedBatchPairs.length > 0) {
+      matchStage.$or = scopedBatchPairs.map((b) => ({
+        segment: b.department || b.segment,
+        year: Number(b.batch ?? b.year),
+      }));
+    } else {
+      if (hasDepartments) {
+        matchStage.segment = { $in: req.teacher.assigned_departments };
+      }
+      if (hasBatches) {
+        const years = req.teacher.assigned_batches
+          .map((b) => (typeof b === "object" && b !== null ? Number(b.batch ?? b.year) : Number(b)))
+          .filter((y) => !isNaN(y));
+        matchStage.year = { $in: years };
+      }
+    }
+  }
+
+  if (req.query.segment) {
+    if (req.teacher && req.teacher.assigned_departments?.length > 0) {
+      if (!req.teacher.assigned_departments.includes(req.query.segment)) {
+        matchStage.segment = "__FORBIDDEN_SCOPE__";
+      } else {
+        matchStage.segment = req.query.segment;
+      }
+    } else {
+      matchStage.segment = req.query.segment;
+    }
+  }
+
+  if (req.query.year) {
+    const queriedYear = Number(req.query.year);
+    if (req.teacher && req.teacher.assigned_batches?.length > 0) {
+      if (!isBatchAllowed(req.teacher, req.query.segment, queriedYear)) {
+        matchStage.year = -99999;
+      } else {
+        matchStage.year = queriedYear;
+      }
+    } else {
+      matchStage.year = queriedYear;
+    }
+  }
 
   if (req.query.status) {
     matchStage.status = req.query.status;
@@ -231,8 +296,15 @@ const getAll = asyncHandler(async (req, res) => {
 
 // ── College / Admin: get one student ─────────────────────────────────────────
 const getOne = asyncHandler(async (req, res) => {
+  const matchStage = {
+    _id: new Types.ObjectId(req.params.id),
+  };
+  if (req.institute?._id) {
+    matchStage.institute_id = new Types.ObjectId(req.institute._id);
+  }
+
   const [student] = await Student.aggregate([
-    { $match: { _id: new Types.ObjectId(req.params.id) } },
+    { $match: matchStage },
     {
       $lookup: {
         from: "institutes",
@@ -258,6 +330,41 @@ const getOne = asyncHandler(async (req, res) => {
   ]);
 
   if (!student) return sendError(res, 404, false, "Student not found.");
+
+  if (req.teacher) {
+    const hasDepartments = req.teacher.assigned_departments?.length > 0;
+    const hasBatches = req.teacher.assigned_batches?.length > 0;
+
+    if (!hasDepartments && !hasBatches) {
+      return sendError(
+        res,
+        403,
+        false,
+        "You do not have any assigned departments or batches.",
+      );
+    }
+
+    if (
+      hasDepartments &&
+      !req.teacher.assigned_departments.includes(student.segment)
+    ) {
+      return sendError(
+        res,
+        403,
+        false,
+        "This student is outside your assigned department(s).",
+      );
+    }
+
+    if (hasBatches && !isBatchAllowed(req.teacher, student.segment, student.year)) {
+      return sendError(
+        res,
+        403,
+        false,
+        "This student is outside your assigned batch(es).",
+      );
+    }
+  }
 
   return sendResponse(res, 200, true, "Student fetched successfully.", student);
 });
@@ -643,6 +750,128 @@ const getMe = asyncHandler(async (req, res) => {
   return sendResponse(res, 200, true, "Profile fetched successfully.", student);
 });
 
+// ── Student: get classmates / peers from the same batch ───────────────────────
+const getMyBatchmates = asyncHandler(async (req, res) => {
+  const currentStudent = await Student.findById(req.student._id).select(
+    "institute_id segment year full_name"
+  );
+
+  if (!currentStudent) {
+    return sendResponse(res, 404, false, "Student not found.");
+  }
+
+  const query = {
+    institute_id: currentStudent.institute_id,
+    _id: { $ne: currentStudent._id },
+    status: "active",
+  };
+
+  if (currentStudent.segment) {
+    query.segment = currentStudent.segment;
+  }
+  if (currentStudent.year) {
+    query.year = currentStudent.year;
+  }
+
+  const batchmates = await Student.find(query)
+    .select(
+      "full_name roll_no enrollment_no profilePhoto segment year last_seen_at status createdAt"
+    )
+    .sort({ roll_no: 1, full_name: 1 });
+
+  return sendResponse(res, 200, true, "Batch students fetched successfully.", {
+    currentStudentId: currentStudent._id,
+    currentStudent: {
+      _id: currentStudent._id,
+      full_name: currentStudent.full_name,
+      roll_no: currentStudent.roll_no,
+      enrollment_no: currentStudent.enrollment_no,
+    },
+    batch: {
+      segment: currentStudent.segment || "General",
+      year: currentStudent.year || null,
+      totalStudents: batchmates.length,
+    },
+    students: batchmates,
+  });
+});
+
+// ── Student: send message to a classmate (In-memory prototype) ─────────────────
+const sendPeerMessage = asyncHandler(async (req, res) => {
+  const { receiver_id, message } = req.body;
+
+  if (!receiver_id || !message || !message.trim()) {
+    return sendError(res, 400, "Receiver ID and non-empty message are required.");
+  }
+
+  const sender = await Student.findById(req.student._id).select(
+    "institute_id full_name"
+  );
+  if (!sender) {
+    return sendError(res, 404, "Sender not found.");
+  }
+
+  const receiver = await Student.findOne({
+    _id: receiver_id,
+    institute_id: sender.institute_id,
+  }).select("full_name");
+
+  if (!receiver) {
+    return sendError(
+      res,
+      404,
+      "Recipient classmate not found in your institute."
+    );
+  }
+
+  // Update sender last_seen_at
+  Student.findByIdAndUpdate(req.student._id, { last_seen_at: new Date() }).exec();
+
+  // In-memory prototype message (NOT saved to MongoDB)
+  const newMsg = {
+    _id: "inmem_" + Date.now() + "_" + Math.random().toString(36).substring(2, 7),
+    institute_id: sender.institute_id,
+    sender_id: sender._id,
+    receiver_id: receiver._id,
+    message: message.trim(),
+    createdAt: new Date(),
+  };
+
+  inMemoryConversationMessages.push(newMsg);
+
+  // Keep memory bounded to last 200 prototype messages
+  if (inMemoryConversationMessages.length > 200) {
+    inMemoryConversationMessages.shift();
+  }
+
+  return sendResponse(res, 201, true, "Message sent.", newMsg);
+});
+
+// ── Student: get conversation messages with a classmate (In-memory prototype) ──
+const getPeerMessages = asyncHandler(async (req, res) => {
+  const { partnerId } = req.params;
+
+  if (!partnerId) {
+    return sendError(res, 400, "Partner ID is required.");
+  }
+
+  const senderId = req.student._id;
+  const instituteId = req.student.institute_id;
+
+  // Touch last_seen_at for heartbeat/presence
+  Student.findByIdAndUpdate(senderId, { last_seen_at: new Date() }).exec();
+
+  // Read strictly from memory
+  const messages = inMemoryConversationMessages.filter(
+    (m) =>
+      String(m.institute_id) === String(instituteId) &&
+      ((String(m.sender_id) === String(senderId) && String(m.receiver_id) === String(partnerId)) ||
+        (String(m.sender_id) === String(partnerId) && String(m.receiver_id) === String(senderId)))
+  );
+
+  return sendResponse(res, 200, true, "Messages fetched.", messages);
+});
+
 // ── Student: update own profile ───────────────────────────────────────────────
 const updateMe = asyncHandler(async (req, res) => {
   const student = await Student.findById(req.student._id);
@@ -713,8 +942,21 @@ const bulkUpload = asyncHandler(async (req, res) => {
       enrollment_no: String(
         row["enrollment_no"] || row["Enrollment No"] || "",
       ).trim(),
-      segment: String(row["segment"] || row["Segment"] || "").trim() || null,
-      year: Number(row["year"] || row["Year"]) || null,
+      segment:
+        String(
+          row["department"] ||
+            row["Department"] ||
+            row["segment"] ||
+            row["Segment"] ||
+            ""
+        ).trim() || null,
+      year:
+        Number(
+          row["batch"] ||
+            row["Batch"] ||
+            row["year"] ||
+            row["Year"]
+        ) || null,
       password: String(row["password"] || row["Password"] || "").trim() || null,
     };
 
@@ -1091,6 +1333,9 @@ module.exports = {
   login,
   logout,
   getMe,
+  getMyBatchmates,
+  sendPeerMessage,
+  getPeerMessages,
   updateMe,
   bulkUpload,
   bulkAssignCourses,

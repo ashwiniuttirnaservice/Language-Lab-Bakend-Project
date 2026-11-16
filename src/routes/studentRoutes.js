@@ -29,6 +29,9 @@ const {
   login,
   logout,
   getMe,
+  getMyBatchmates,
+  sendPeerMessage,
+  getPeerMessages,
   updateMe,
   bulkUpload,
   bulkAssignCourses,
@@ -42,6 +45,24 @@ router.post("/login", validateSchema(loginSchema), login);
 
 // ── Student (self) ────────────────────────────────────────────────────────────
 router.get("/me", protectStudent, authorizeRoles("student"), getMe);
+router.get(
+  "/me/batchmates",
+  protectStudent,
+  authorizeRoles("student"),
+  getMyBatchmates,
+);
+router.post(
+  "/me/messages",
+  protectStudent,
+  authorizeRoles("student"),
+  sendPeerMessage,
+);
+router.get(
+  "/me/messages/:partnerId",
+  protectStudent,
+  authorizeRoles("student"),
+  getPeerMessages,
+);
 router.post("/logout", protectStudent, authorizeRoles("student"), logout);
 router.put(
   "/me",
@@ -79,7 +100,12 @@ router.post(
   validateSchema(createStudentSchema),
   create,
 );
-router.get("/", protectInstitute, authorizeRoles("institute"), getAll);
+router.get(
+  "/",
+  protectInstitute,
+  authorizeRoles("institute", "faculty"),
+  getAll,
+);
 // Must be registered before "/:id" — otherwise PUT /:id swallows this path,
 // treating "bulk-assign-courses" as the id and crashing on ObjectId cast.
 router.put(
@@ -98,7 +124,12 @@ router.delete(
   authorizeRoles("institute"),
   bulkPermanentDelete,
 );
-router.get("/:id", protectInstitute, authorizeRoles("institute"), getOne);
+router.get(
+  "/:id",
+  protectInstitute,
+  authorizeRoles("institute", "faculty"),
+  getOne,
+);
 router.put(
   "/:id",
   protectInstitute,

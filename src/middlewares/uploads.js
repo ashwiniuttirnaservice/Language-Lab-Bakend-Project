@@ -35,6 +35,8 @@ const getFolderPath = (fieldname) => {
       return "uploads/tasks";
     case "taskSubmissionMedia":
       return "uploads/task-submissions";
+    case "interactiveAudio":
+      return "uploads/interactive-learning";
     case "videoFile":
       return "uploads/modules/videos";
     case "audioFile":

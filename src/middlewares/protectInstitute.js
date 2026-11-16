@@ -20,8 +20,36 @@ const protectInstitute = async (req, res, next) => {
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-    if (decoded.role !== "institute") {
-      return sendError(res, 403, false, "Access denied. Not an institute token.");
+    if (decoded.role !== "institute" && decoded.role !== "faculty") {
+      return sendError(res, 403, false, "Access denied. Not an institute or faculty token.");
+    }
+
+    if (decoded.role === "faculty") {
+      const Teacher = require("../models/Teacher");
+      const teacher = await Teacher.findById(decoded.id).select("-password");
+
+      if (!teacher) {
+        return sendError(res, 401, false, "Faculty account not found.");
+      }
+
+      if (teacher.status !== "active") {
+        return sendError(res, 403, false, "Faculty account is inactive.");
+      }
+
+      const institute = await Institute.findById(teacher.institute_id).select("-password");
+      if (!institute) {
+        return sendError(res, 404, false, "Associated institute not found.");
+      }
+
+      const teacherObj = teacher.toObject();
+      teacherObj.role = "faculty";
+      req.teacher = teacherObj;
+
+      const instituteObj = institute.toObject();
+      instituteObj.role = "institute";
+      req.institute = instituteObj;
+
+      return next();
     }
 
     const institute = await Institute.findById(decoded.id).select("-password");

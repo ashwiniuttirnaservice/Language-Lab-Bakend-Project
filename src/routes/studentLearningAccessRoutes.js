@@ -20,7 +20,7 @@ const {
 } = require("../controller/studentLearningAccessController");
 
 // All routes here act on the logged-in institute's own data.
-router.use(protectInstitute, authorizeRoles("institute"));
+router.use(protectInstitute, authorizeRoles("institute", "faculty"));
 
 router.get("/departments", getDepartments);
 router.get("/courses/:courseId/topics", getTopicsByCourse);

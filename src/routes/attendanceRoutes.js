@@ -13,8 +13,8 @@ router.get("/me", protectStudent, authorizeRoles("student"), getMyAttendance);
 // Editor — view a student's attendance
 router.get("/student/:id", protectEditor, authorizeRoles("editor"), getStudentAttendance);
 
-// Institute — view all students or a specific student
-router.get("/institute/all", protectInstitute, authorizeRoles("institute"), getInstituteAttendance);
-router.get("/institute/student/:id", protectInstitute, authorizeRoles("institute"), getStudentAttendance);
+// Institute & Faculty — view all students or a specific student
+router.get("/institute/all", protectInstitute, authorizeRoles("institute", "faculty"), getInstituteAttendance);
+router.get("/institute/student/:id", protectInstitute, authorizeRoles("institute", "faculty"), getStudentAttendance);
 
 module.exports = router;
