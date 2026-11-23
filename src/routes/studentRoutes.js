@@ -30,6 +30,9 @@ const {
   logout,
   getMe,
   getMyBatchmates,
+  getActiveConversationSession,
+  startConversationSession,
+  endConversationSession,
   sendPeerMessage,
   getPeerMessages,
   updateMe,
@@ -50,6 +53,24 @@ router.get(
   protectStudent,
   authorizeRoles("student"),
   getMyBatchmates,
+);
+router.get(
+  "/me/conversation-session/active",
+  protectStudent,
+  authorizeRoles("student"),
+  getActiveConversationSession,
+);
+router.post(
+  "/me/conversation-session/start",
+  protectStudent,
+  authorizeRoles("student"),
+  startConversationSession,
+);
+router.post(
+  "/me/conversation-session/end",
+  protectStudent,
+  authorizeRoles("student"),
+  endConversationSession,
 );
 router.post(
   "/me/messages",
