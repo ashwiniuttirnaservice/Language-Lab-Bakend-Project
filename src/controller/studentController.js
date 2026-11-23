@@ -6,6 +6,8 @@ const Student = require("../models/Student");
 const Course = require("../models/Course");
 const License = require("../models/License");
 const Session = require("../models/Session");
+const ConversationSession = require("../models/ConversationSession");
+const ConversationMessage = require("../models/ConversationMessage");
 const asyncHandler = require("../middlewares/asyncHandler");
 const { isBatchAllowed } = require("../utils/teacherAccess");
 
@@ -753,12 +755,15 @@ const getMe = asyncHandler(async (req, res) => {
 // ── Student: get classmates / peers from the same batch ───────────────────────
 const getMyBatchmates = asyncHandler(async (req, res) => {
   const currentStudent = await Student.findById(req.student._id).select(
-    "institute_id segment year full_name"
+    "institute_id segment year full_name roll_no enrollment_no last_seen_at"
   );
 
   if (!currentStudent) {
     return sendResponse(res, 404, false, "Student not found.");
   }
+
+  // Update caller last_seen_at
+  Student.findByIdAndUpdate(currentStudent._id, { last_seen_at: new Date() }).exec();
 
   const query = {
     institute_id: currentStudent.institute_id,
@@ -779,6 +784,65 @@ const getMyBatchmates = asyncHandler(async (req, res) => {
     )
     .sort({ roll_no: 1, full_name: 1 });
 
+  // Find all active conversation sessions in this institute
+  const activeSessions = await ConversationSession.find({
+    institute_id: currentStudent.institute_id,
+    status: "active",
+  });
+
+  // Map participant IDs currently in an active session -> session info
+  const busyMap = new Map();
+  for (const s of activeSessions) {
+    for (const pId of s.participants) {
+      busyMap.set(String(pId), s);
+    }
+  }
+
+  const now = Date.now();
+  const TEN_MINUTES_MS = 10 * 60 * 1000;
+
+  // Annotate each batchmate with chatStatus: 'available' | 'busy' | 'offline'
+  const annotatedStudents = batchmates.map((st) => {
+    const stObj = st.toObject();
+    const isOnline =
+      st.last_seen_at &&
+      now - new Date(st.last_seen_at).getTime() < TEN_MINUTES_MS;
+    const activeSession = busyMap.get(String(st._id));
+
+    let chatStatus = "offline";
+    if (activeSession) {
+      chatStatus = "busy";
+    } else if (isOnline) {
+      chatStatus = "available";
+    } else {
+      chatStatus = "offline";
+    }
+
+    return {
+      ...stObj,
+      chatStatus,
+      activeSessionId: activeSession ? activeSession._id : null,
+    };
+  });
+
+  // Check if current logged-in student has an active session
+  let myActiveSessionData = null;
+  const mySession = busyMap.get(String(currentStudent._id));
+  if (mySession) {
+    const partnerId = mySession.participants.find(
+      (p) => String(p) !== String(currentStudent._id)
+    );
+    const partner = await Student.findById(partnerId).select(
+      "full_name roll_no enrollment_no profilePhoto last_seen_at"
+    );
+    myActiveSessionData = {
+      sessionId: mySession._id,
+      partner: partner || null,
+      initiatorId: mySession.initiator_id,
+      startedAt: mySession.createdAt,
+    };
+  }
+
   return sendResponse(res, 200, true, "Batch students fetched successfully.", {
     currentStudentId: currentStudent._id,
     currentStudent: {
@@ -792,23 +856,230 @@ const getMyBatchmates = asyncHandler(async (req, res) => {
       year: currentStudent.year || null,
       totalStudents: batchmates.length,
     },
-    students: batchmates,
+    students: annotatedStudents,
+    myActiveSession: myActiveSessionData,
   });
 });
 
-// ── Student: send message to a classmate (In-memory prototype) ─────────────────
+// ── Student: get active conversation session for current student ───────────────
+const getActiveConversationSession = asyncHandler(async (req, res) => {
+  const studentId = req.student._id;
+  const instituteId = req.student.institute_id;
+
+  Student.findByIdAndUpdate(studentId, { last_seen_at: new Date() }).exec();
+
+  const activeSession = await ConversationSession.findOne({
+    institute_id: instituteId,
+    participants: studentId,
+    status: "active",
+  }).sort({ createdAt: -1 });
+
+  if (!activeSession) {
+    return sendResponse(res, 200, true, "No active conversation session.", {
+      session: null,
+    });
+  }
+
+  const partnerId = activeSession.participants.find(
+    (p) => String(p) !== String(studentId)
+  );
+
+  const partner = await Student.findById(partnerId).select(
+    "full_name roll_no enrollment_no profilePhoto last_seen_at"
+  );
+
+  return sendResponse(res, 200, true, "Active conversation session fetched.", {
+    session: {
+      _id: activeSession._id,
+      status: activeSession.status,
+      initiator_id: activeSession.initiator_id,
+      partner: partner || null,
+      startedAt: activeSession.createdAt,
+    },
+  });
+});
+
+// ── Student: start 1-on-1 conversation session with an available classmate ──────
+const startConversationSession = asyncHandler(async (req, res) => {
+  const { partner_id } = req.body;
+  const currentStudentId = req.student._id;
+  const instituteId = req.student.institute_id;
+
+  if (!partner_id) {
+    return sendError(
+      res,
+      400,
+      false,
+      "Partner ID is required to start a conversation."
+    );
+  }
+
+  if (String(partner_id) === String(currentStudentId)) {
+    return sendError(
+      res,
+      400,
+      false,
+      "You cannot start a conversation with yourself."
+    );
+  }
+
+  const partner = await Student.findOne({
+    _id: partner_id,
+    institute_id: instituteId,
+    status: "active",
+  }).select("full_name roll_no enrollment_no profilePhoto last_seen_at");
+
+  if (!partner) {
+    return sendError(
+      res,
+      404,
+      false,
+      "Student partner not found in your institute."
+    );
+  }
+
+  // 1. Check if current student is already in an active session
+  const currentStudentActiveSession = await ConversationSession.findOne({
+    institute_id: instituteId,
+    participants: currentStudentId,
+    status: "active",
+  });
+
+  if (currentStudentActiveSession) {
+    // If it's already with this same partner, resume existing session
+    const isSamePartner = currentStudentActiveSession.participants.some(
+      (p) => String(p) === String(partner_id)
+    );
+    if (isSamePartner) {
+      return sendResponse(
+        res,
+        200,
+        true,
+        "Resuming active conversation session.",
+        {
+          session: {
+            _id: currentStudentActiveSession._id,
+            status: currentStudentActiveSession.status,
+            initiator_id: currentStudentActiveSession.initiator_id,
+            partner,
+            startedAt: currentStudentActiveSession.createdAt,
+          },
+        }
+      );
+    }
+
+    return sendError(
+      res,
+      400,
+      false,
+      "You already have an active conversation with another classmate. Please end it before starting a new one."
+    );
+  }
+
+  // 2. Check if partner is already in an active session with someone else
+  const partnerActiveSession = await ConversationSession.findOne({
+    institute_id: instituteId,
+    participants: partner_id,
+    status: "active",
+  });
+
+  if (partnerActiveSession) {
+    return sendError(
+      res,
+      400,
+      false,
+      `${partner.full_name} is currently in a conversation session with another student. Please select an available classmate.`
+    );
+  }
+
+  // 3. Create new conversation session
+  const newSession = await ConversationSession.create({
+    institute_id: instituteId,
+    initiator_id: currentStudentId,
+    partner_id: partner._id,
+    participants: [currentStudentId, partner._id],
+    status: "active",
+  });
+
+  Student.findByIdAndUpdate(currentStudentId, { last_seen_at: new Date() }).exec();
+
+  return sendResponse(res, 201, true, "Conversation session started.", {
+    session: {
+      _id: newSession._id,
+      status: newSession.status,
+      initiator_id: newSession.initiator_id,
+      partner,
+      startedAt: newSession.createdAt,
+    },
+  });
+});
+
+// ── Student: end 1-on-1 conversation session ────────────────────────────────────
+const endConversationSession = asyncHandler(async (req, res) => {
+  const currentStudentId = req.student._id;
+  const instituteId = req.student.institute_id;
+  const { session_id } = req.body;
+
+  let query = {
+    institute_id: instituteId,
+    participants: currentStudentId,
+    status: "active",
+  };
+  if (session_id) {
+    query._id = session_id;
+  }
+
+  const session = await ConversationSession.findOne(query);
+
+  if (!session) {
+    return sendResponse(
+      res,
+      200,
+      true,
+      "No active session found or session has already ended.",
+      { status: "ended" }
+    );
+  }
+
+  session.status = "ended";
+  session.ended_by = currentStudentId;
+  session.ended_at = new Date();
+  await session.save();
+
+  Student.findByIdAndUpdate(currentStudentId, { last_seen_at: new Date() }).exec();
+
+  return sendResponse(
+    res,
+    200,
+    true,
+    "Conversation session ended successfully.",
+    {
+      sessionId: session._id,
+      status: "ended",
+      endedBy: currentStudentId,
+      endedAt: session.ended_at,
+    }
+  );
+});
+
+// ── Student: send message in active conversation session (Saved to MongoDB) ───
 const sendPeerMessage = asyncHandler(async (req, res) => {
-  const { receiver_id, message } = req.body;
+  const { receiver_id, message, session_id } = req.body;
 
   if (!receiver_id || !message || !message.trim()) {
-    return sendError(res, 400, "Receiver ID and non-empty message are required.");
+    return sendError(
+      res,
+      400,
+      false,
+      "Receiver ID and non-empty message are required."
+    );
   }
 
   const sender = await Student.findById(req.student._id).select(
     "institute_id full_name"
   );
   if (!sender) {
-    return sendError(res, 404, "Sender not found.");
+    return sendError(res, 404, false, "Sender not found.");
   }
 
   const receiver = await Student.findOne({
@@ -820,39 +1091,59 @@ const sendPeerMessage = asyncHandler(async (req, res) => {
     return sendError(
       res,
       404,
+      false,
       "Recipient classmate not found in your institute."
+    );
+  }
+
+  // Find active session between these two
+  let session = null;
+  if (session_id) {
+    session = await ConversationSession.findOne({
+      _id: session_id,
+      institute_id: sender.institute_id,
+      participants: { $all: [sender._id, receiver._id] },
+      status: "active",
+    });
+  } else {
+    session = await ConversationSession.findOne({
+      institute_id: sender.institute_id,
+      participants: { $all: [sender._id, receiver._id] },
+      status: "active",
+    });
+  }
+
+  if (!session) {
+    return sendError(
+      res,
+      400,
+      false,
+      "This conversation session has ended. You cannot send messages."
     );
   }
 
   // Update sender last_seen_at
   Student.findByIdAndUpdate(req.student._id, { last_seen_at: new Date() }).exec();
 
-  // In-memory prototype message (NOT saved to MongoDB)
-  const newMsg = {
-    _id: "inmem_" + Date.now() + "_" + Math.random().toString(36).substring(2, 7),
+  // Save persistent message to MongoDB
+  const savedMsg = await ConversationMessage.create({
+    session_id: session._id,
     institute_id: sender.institute_id,
     sender_id: sender._id,
     receiver_id: receiver._id,
     message: message.trim(),
-    createdAt: new Date(),
-  };
+  });
 
-  inMemoryConversationMessages.push(newMsg);
-
-  // Keep memory bounded to last 200 prototype messages
-  if (inMemoryConversationMessages.length > 200) {
-    inMemoryConversationMessages.shift();
-  }
-
-  return sendResponse(res, 201, true, "Message sent.", newMsg);
+  return sendResponse(res, 201, true, "Message sent.", savedMsg);
 });
 
-// ── Student: get conversation messages with a classmate (In-memory prototype) ──
+// ── Student: get conversation messages (Saved in MongoDB) ────────────────────
 const getPeerMessages = asyncHandler(async (req, res) => {
   const { partnerId } = req.params;
+  const { sessionId } = req.query;
 
   if (!partnerId) {
-    return sendError(res, 400, "Partner ID is required.");
+    return sendError(res, 400, false, "Partner ID is required.");
   }
 
   const senderId = req.student._id;
@@ -861,15 +1152,54 @@ const getPeerMessages = asyncHandler(async (req, res) => {
   // Touch last_seen_at for heartbeat/presence
   Student.findByIdAndUpdate(senderId, { last_seen_at: new Date() }).exec();
 
-  // Read strictly from memory
-  const messages = inMemoryConversationMessages.filter(
-    (m) =>
-      String(m.institute_id) === String(instituteId) &&
-      ((String(m.sender_id) === String(senderId) && String(m.receiver_id) === String(partnerId)) ||
-        (String(m.sender_id) === String(partnerId) && String(m.receiver_id) === String(senderId)))
-  );
+  // Find target session
+  let targetSessionId = sessionId;
+  let currentSession = null;
 
-  return sendResponse(res, 200, true, "Messages fetched.", messages);
+  if (targetSessionId) {
+    currentSession = await ConversationSession.findById(targetSessionId);
+  } else {
+    // Look for active session first, or latest session
+    currentSession = await ConversationSession.findOne({
+      institute_id: instituteId,
+      participants: { $all: [senderId, partnerId] },
+    }).sort({ createdAt: -1 });
+
+    if (currentSession) {
+      targetSessionId = currentSession._id;
+    }
+  }
+
+  let messages = [];
+  if (targetSessionId) {
+    messages = await ConversationMessage.find({
+      session_id: targetSessionId,
+    })
+      .sort({ createdAt: 1 })
+      .lean();
+  } else {
+    messages = await ConversationMessage.find({
+      institute_id: instituteId,
+      $or: [
+        { sender_id: senderId, receiver_id: partnerId },
+        { sender_id: partnerId, receiver_id: senderId },
+      ],
+    })
+      .sort({ createdAt: 1 })
+      .lean();
+  }
+
+  return sendResponse(res, 200, true, "Messages fetched.", {
+    session: currentSession
+      ? {
+          _id: currentSession._id,
+          status: currentSession.status,
+          ended_by: currentSession.ended_by,
+          ended_at: currentSession.ended_at,
+        }
+      : null,
+    messages,
+  });
 });
 
 // ── Student: update own profile ───────────────────────────────────────────────
@@ -1334,6 +1664,9 @@ module.exports = {
   logout,
   getMe,
   getMyBatchmates,
+  getActiveConversationSession,
+  startConversationSession,
+  endConversationSession,
   sendPeerMessage,
   getPeerMessages,
   updateMe,
