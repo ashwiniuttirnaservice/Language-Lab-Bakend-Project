@@ -711,6 +711,8 @@ const login = asyncHandler(async (req, res) => {
 
 // ── Student: logout (frees seat + deactivates session) ───────────────────────
 const logout = asyncHandler(async (req, res) => {
+  const studentId = req.student._id;
+
   if (req.session_id) {
     const session = await Session.findById(req.session_id);
     if (session && session.is_active) {
@@ -721,9 +723,24 @@ const logout = asyncHandler(async (req, res) => {
     }
   }
 
+  // Auto-end any active conversation session when this student logs out
+  await ConversationSession.updateMany(
+    {
+      participants: studentId,
+      status: "active",
+    },
+    {
+      $set: {
+        status: "ended",
+        ended_by: studentId,
+        ended_at: new Date(),
+      },
+    }
+  );
+
   // Clear last_seen_at so dashboard "active now" / login-status stats reflect
   // this logout immediately instead of waiting out the 5-min heartbeat decay.
-  await Student.findByIdAndUpdate(req.student._id, {
+  await Student.findByIdAndUpdate(studentId, {
     $unset: { last_seen_at: "" },
   });
 
@@ -790,16 +807,37 @@ const getMyBatchmates = asyncHandler(async (req, res) => {
     status: "active",
   });
 
+  const now = Date.now();
+  const TWO_MINUTES_MS = 2 * 60 * 1000;
+  const TEN_MINUTES_MS = 10 * 60 * 1000;
+
   // Map participant IDs currently in an active session -> session info
+  // Also auto-end any stale sessions where a participant is offline
   const busyMap = new Map();
   for (const s of activeSessions) {
+    const participants = await Student.find({
+      _id: { $in: s.participants },
+    }).select("last_seen_at");
+
+    const anyOffline =
+      participants.length < 2 ||
+      participants.some(
+        (p) =>
+          !p.last_seen_at ||
+          now - new Date(p.last_seen_at).getTime() > TWO_MINUTES_MS
+      );
+
+    if (anyOffline) {
+      s.status = "ended";
+      s.ended_at = new Date();
+      await s.save();
+      continue;
+    }
+
     for (const pId of s.participants) {
       busyMap.set(String(pId), s);
     }
   }
-
-  const now = Date.now();
-  const TEN_MINUTES_MS = 10 * 60 * 1000;
 
   // Annotate each batchmate with chatStatus: 'available' | 'busy' | 'offline'
   const annotatedStudents = batchmates.map((st) => {
@@ -823,6 +861,16 @@ const getMyBatchmates = asyncHandler(async (req, res) => {
       chatStatus,
       activeSessionId: activeSession ? activeSession._id : null,
     };
+  });
+
+  // Sort: online ('available') first, then 'busy', then 'offline'
+  const statusPriority = { available: 1, busy: 2, offline: 3 };
+  annotatedStudents.sort((a, b) => {
+    const pA = statusPriority[a.chatStatus] || 99;
+    const pB = statusPriority[b.chatStatus] || 99;
+    if (pA !== pB) return pA - pB;
+    if (a.roll_no && b.roll_no) return a.roll_no.localeCompare(b.roll_no);
+    return (a.full_name || "").localeCompare(b.full_name || "");
   });
 
   // Check if current logged-in student has an active session
@@ -887,6 +935,23 @@ const getActiveConversationSession = asyncHandler(async (req, res) => {
   const partner = await Student.findById(partnerId).select(
     "full_name roll_no enrollment_no profilePhoto last_seen_at"
   );
+
+  const TWO_MINUTES_MS = 2 * 60 * 1000;
+  const isPartnerOffline =
+    !partner ||
+    !partner.last_seen_at ||
+    Date.now() - new Date(partner.last_seen_at).getTime() > TWO_MINUTES_MS;
+
+  if (isPartnerOffline) {
+    activeSession.status = "ended";
+    activeSession.ended_by = partnerId;
+    activeSession.ended_at = new Date();
+    await activeSession.save();
+
+    return sendResponse(res, 200, true, "No active conversation session.", {
+      session: null,
+    });
+  }
 
   return sendResponse(res, 200, true, "Active conversation session fetched.", {
     session: {
@@ -1031,6 +1096,22 @@ const endConversationSession = asyncHandler(async (req, res) => {
 
   const session = await ConversationSession.findOne(query);
 
+  // Mark all active conversation sessions for this student as ended
+  await ConversationSession.updateMany(
+    {
+      institute_id: instituteId,
+      participants: currentStudentId,
+      status: "active",
+    },
+    {
+      $set: {
+        status: "ended",
+        ended_by: currentStudentId,
+        ended_at: new Date(),
+      },
+    }
+  );
+
   if (!session) {
     return sendResponse(
       res,
@@ -1167,6 +1248,23 @@ const getPeerMessages = asyncHandler(async (req, res) => {
 
     if (currentSession) {
       targetSessionId = currentSession._id;
+    }
+  }
+
+  if (currentSession && currentSession.status === "active") {
+    // Check if partner has gone offline / logged out (> 2 minutes without heartbeat or last_seen_at missing)
+    const partner = await Student.findById(partnerId).select("last_seen_at full_name");
+    const TWO_MINUTES_MS = 2 * 60 * 1000;
+    const isPartnerOffline =
+      !partner ||
+      !partner.last_seen_at ||
+      Date.now() - new Date(partner.last_seen_at).getTime() > TWO_MINUTES_MS;
+
+    if (isPartnerOffline) {
+      currentSession.status = "ended";
+      currentSession.ended_by = partnerId;
+      currentSession.ended_at = new Date();
+      await currentSession.save();
     }
   }
 
