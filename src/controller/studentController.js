@@ -1268,24 +1268,16 @@ const getPeerMessages = asyncHandler(async (req, res) => {
     }
   }
 
-  let messages = [];
-  if (targetSessionId) {
-    messages = await ConversationMessage.find({
-      session_id: targetSessionId,
-    })
-      .sort({ createdAt: 1 })
-      .lean();
-  } else {
-    messages = await ConversationMessage.find({
-      institute_id: instituteId,
-      $or: [
-        { sender_id: senderId, receiver_id: partnerId },
-        { sender_id: partnerId, receiver_id: senderId },
-      ],
-    })
-      .sort({ createdAt: 1 })
-      .lean();
-  }
+  // Fetch full conversation history between these two classmates in this institute
+  const messages = await ConversationMessage.find({
+    institute_id: instituteId,
+    $or: [
+      { sender_id: senderId, receiver_id: partnerId },
+      { sender_id: partnerId, receiver_id: senderId },
+    ],
+  })
+    .sort({ createdAt: 1 })
+    .lean();
 
   return sendResponse(res, 200, true, "Messages fetched.", {
     session: currentSession
