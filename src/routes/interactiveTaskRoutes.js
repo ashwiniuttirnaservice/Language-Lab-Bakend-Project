@@ -16,6 +16,7 @@ const {
   getStudentTaskById,
   evaluateSpeech,
   submitSpeech,
+  notifyUnsubmitted,
 } = require("../controller/interactiveTaskController");
 
 // ── Student Routes ────────────────────────────────────────────────────────────
@@ -37,6 +38,7 @@ router.get("/:id", protectInstitute, getOne);
 router.put("/:id", protectInstitute, update);
 router.delete("/:id", protectInstitute, remove);
 router.put("/:id/assign", protectInstitute, assignTask);
+router.post("/:id/notify-unsubmitted", protectInstitute, notifyUnsubmitted);
 router.get("/:id/submissions", protectInstitute, getSubmissions);
 
 module.exports = router;

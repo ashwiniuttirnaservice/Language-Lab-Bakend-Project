@@ -25,5 +25,7 @@ router.use("/attendance", require("./routes/attendanceRoutes"));
 router.use("/ai", require("./routes/aiRoutes"));
 router.use("/sync", require("./routes/syncRoutes"));
 router.use("/interactive-task", require("./routes/interactiveTaskRoutes"));
+router.use("/notifications", require("./routes/notificationRoutes"));
+router.use("/notification", require("./routes/notificationRoutes"));
 
 module.exports = router;

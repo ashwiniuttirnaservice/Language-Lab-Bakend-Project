@@ -7,6 +7,7 @@ const asyncHandler = require("../middlewares/asyncHandler");
 const { sendResponse, sendError } = require("../utils/apiResponse");
 const uploadToAws = require("../utils/awsUpload");
 const { getTeacherAssignedCourseIds, isCourseAllowed, buildTeacherStudentScope, isBatchAllowed } = require("../utils/teacherAccess");
+const NotificationService = require("../service/notificationService");
 
 const ALLOWED_ATTACHMENT_MIMES = {
   "image/jpeg": "image",
@@ -318,6 +319,7 @@ const assign = asyncHandler(async (req, res) => {
     }
   }
 
+  const newlyAssignedBatches = [];
   for (const item of rawList) {
     const segment = String(item.segment).trim();
     const year = Number(item.year);
@@ -326,10 +328,43 @@ const assign = asyncHandler(async (req, res) => {
     );
     if (!alreadyAssigned) {
       practical.assigned_batches.push({ segment, year });
+      newlyAssignedBatches.push({ segment, year });
     }
   }
 
   await practical.save();
+
+  // Trigger student notifications for newly assigned batches
+  if (newlyAssignedBatches.length > 0) {
+    const batchConditions = newlyAssignedBatches.map((b) => ({
+      segment: b.segment,
+      year: b.year,
+    }));
+    Student.find({
+      institute_id: req.institute._id,
+      is_active: { $ne: false },
+      $or: batchConditions,
+    })
+      .select("_id")
+      .lean()
+      .then((students) => {
+        if (students && students.length > 0) {
+          const studentIds = students.map((s) => s._id);
+          NotificationService.createBulkNotifications(studentIds, {
+            institute_id: req.institute._id,
+            title: `New Practical Manual: ${practical.title}`,
+            description: practical.description || "A new practical lab manual has been assigned to your batch.",
+            category: "practical_manual",
+            type: "Practical Manual",
+            priority: "Incomplete",
+            action_url: `/dashboard/topics?courseId=${practical.course_id}&type=practical_manual`,
+            action_label: "View Manual",
+            meta_data: { practical_id: practical._id },
+          });
+        }
+      })
+      .catch((err) => console.error("[practicalController] Notification error on assign:", err));
+  }
 
   return sendResponse(res, 200, true, "Practical manual assigned successfully.", practical);
 });
@@ -392,7 +427,7 @@ const getSubmissions = asyncHandler(async (req, res) => {
     _id: req.params.id,
     institute_id: req.institute._id,
     is_deleted: false,
-  }).select("_id course_id");
+  }).select("_id course_id assigned_batches");
   if (!practical) return sendError(res, 404, false, "Practical question not found.");
 
   if (req.teacher) {
@@ -408,14 +443,146 @@ const getSubmissions = asyncHandler(async (req, res) => {
   }
 
   const submissions = await PracticalSubmission.find({ practical_id: practical._id })
-    .populate("student_id", "full_name enrollment_no")
+    .populate("student_id", "full_name enrollment_no roll_no segment year email")
     .sort({ createdAt: -1 })
     .lean();
+
+  const submittedStudentIds = submissions
+    .map((s) => s.student_id?._id?.toString() || s.student_id?.toString())
+    .filter(Boolean);
+
+  let assignedStudentQuery = {
+    institute_id: req.institute._id,
+    is_active: { $ne: false },
+    status: { $ne: "suspended" },
+    purchased_courses: practical.course_id,
+  };
+
+  if (Array.isArray(practical.assigned_batches) && practical.assigned_batches.length > 0) {
+    const batchConditions = practical.assigned_batches.map((b) => ({
+      segment: String(b.segment).trim(),
+      year: Number(b.year),
+    }));
+    assignedStudentQuery.$or = batchConditions;
+  }
+
+  if (req.teacher) {
+    const teacherScope = buildTeacherStudentScope(req.teacher);
+    if (teacherScope) {
+      assignedStudentQuery = { $and: [assignedStudentQuery, teacherScope] };
+    }
+  }
+
+  const allAssignedStudents = await Student.find(assignedStudentQuery)
+    .select("_id full_name enrollment_no roll_no segment year email")
+    .sort({ full_name: 1 })
+    .lean();
+
+  const submittedStudentIdSet = new Set(submittedStudentIds);
+  const unsubmitted = allAssignedStudents.filter(
+    (student) => !submittedStudentIdSet.has(student._id.toString())
+  );
 
   return sendResponse(res, 200, true, "Submissions fetched successfully.", {
     total: submissions.length,
     submissions,
+    unsubmitted,
+    unsubmittedCount: unsubmitted.length,
+    totalAssigned: allAssignedStudents.length,
   });
+});
+
+// POST /practical/:id/notify-unsubmitted — send reminder notification to unsubmitted students
+const notifyUnsubmitted = asyncHandler(async (req, res) => {
+  const practical = await Practical.findOne({
+    _id: req.params.id,
+    institute_id: req.institute._id,
+    is_deleted: false,
+  }).select("_id title course_id assigned_batches");
+  if (!practical) return sendError(res, 404, false, "Practical manual not found.");
+
+  if (req.teacher) {
+    const allowedCourseIds = await getTeacherAssignedCourseIds(req.teacher);
+    if (!isCourseAllowed(practical.course_id, allowedCourseIds)) {
+      return sendError(
+        res,
+        403,
+        false,
+        "You do not have access to send notifications for this course.",
+      );
+    }
+  }
+
+  const submissions = await PracticalSubmission.find({ practical_id: practical._id })
+    .select("student_id")
+    .lean();
+
+  const submittedStudentIds = submissions
+    .map((s) => s.student_id?.toString())
+    .filter(Boolean);
+
+  let assignedStudentQuery = {
+    institute_id: req.institute._id,
+    is_active: { $ne: false },
+    status: { $ne: "suspended" },
+    purchased_courses: practical.course_id,
+  };
+
+  if (Array.isArray(practical.assigned_batches) && practical.assigned_batches.length > 0) {
+    const batchConditions = practical.assigned_batches.map((b) => ({
+      segment: String(b.segment).trim(),
+      year: Number(b.year),
+    }));
+    assignedStudentQuery.$or = batchConditions;
+  }
+
+  if (req.teacher) {
+    const teacherScope = buildTeacherStudentScope(req.teacher);
+    if (teacherScope) {
+      assignedStudentQuery = { $and: [assignedStudentQuery, teacherScope] };
+    }
+  }
+
+  const allAssignedStudents = await Student.find(assignedStudentQuery)
+    .select("_id")
+    .lean();
+
+  const submittedStudentIdSet = new Set(submittedStudentIds);
+  const unsubmitted = allAssignedStudents.filter(
+    (student) => !submittedStudentIdSet.has(student._id.toString())
+  );
+
+  if (unsubmitted.length === 0) {
+    return sendResponse(res, 200, true, "All assigned students have already submitted this practical manual.", {
+      notifiedCount: 0,
+    });
+  }
+
+  const recipientIds = unsubmitted.map((s) => s._id);
+
+  const created = await NotificationService.createBulkNotifications(recipientIds, {
+    institute_id: req.institute._id,
+    title: `Practical Manual Reminder: ${practical.title}`,
+    description: `You have not yet submitted the practical manual "${practical.title}". Please complete and submit it soon.`,
+    category: "practical_manual",
+    type: "Practical Manual",
+    priority: "Incomplete",
+    action_url: `/dashboard/topics?courseId=${practical.course_id}&type=practical_manual`,
+    action_label: "View Manual",
+    meta_data: { practical_id: practical._id },
+  });
+
+  if (!created || created.length === 0) {
+    return sendError(res, 500, false, "Failed to dispatch notifications to students.");
+  }
+
+  return sendResponse(
+    res,
+    200,
+    true,
+    `Notification reminder sent successfully to ${created.length} unsubmitted student(s).`,
+    { notifiedCount: created.length },
+  );
 });
 
 // PUT /practical/:id/submissions/:submissionId — grade / feedback
@@ -452,6 +619,22 @@ const gradeSubmission = asyncHandler(async (req, res) => {
   submission.reviewed_at = new Date();
 
   await submission.save();
+
+  // Trigger notification for reviewed student submission
+  NotificationService.createNotification({
+    recipient_type: "student",
+    recipient_id: submission.student_id,
+    recipient_model: "Student",
+    institute_id: req.institute._id,
+    title: `Practical Manual Graded: ${practical.title}`,
+    description: `Your practical submission was reviewed. Marks: ${marks ?? submission.marks ?? "N/A"}.${feedback ? ` Feedback: ${feedback}` : ""}`,
+    category: "practical_manual",
+    type: "Practical Manual",
+    priority: "Completed",
+    action_url: `/dashboard/topics?courseId=${practical.course_id}&type=practical_manual`,
+    action_label: "View Manual",
+    meta_data: { practical_id: practical._id, marks, feedback },
+  }).catch((err) => console.error("[practicalController] Notification error on gradeSubmission:", err));
 
   return sendResponse(res, 200, true, "Submission updated successfully.", submission);
 });
@@ -689,4 +872,5 @@ module.exports = {
   getMine,
   getOneMine,
   submitMine,
+  notifyUnsubmitted,
 };

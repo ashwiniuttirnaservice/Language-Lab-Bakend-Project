@@ -6,6 +6,7 @@ const Student = require("../models/Student");
 const asyncHandler = require("../middlewares/asyncHandler");
 const { sendResponse, sendError } = require("../utils/apiResponse");
 const { getTeacherAssignedCourseIds, isCourseAllowed, buildTeacherStudentScope, isBatchAllowed } = require("../utils/teacherAccess");
+const NotificationService = require("../service/notificationService");
 
 // POST /task
 const create = asyncHandler(async (req, res) => {
@@ -115,6 +116,43 @@ const create = asyncHandler(async (req, res) => {
     questions,
     created_by: instituteId,
   });
+
+  // Trigger batch-aligned notifications if published
+  if (status !== "draft") {
+    let studentQuery = null;
+    if (target === "selected" && Array.isArray(student_ids) && student_ids.length > 0) {
+      studentQuery = { _id: { $in: student_ids }, institute_id: instituteId, is_active: { $ne: false } };
+    } else if (Array.isArray(req.body.assigned_batches) && req.body.assigned_batches.length > 0) {
+      const batchConditions = req.body.assigned_batches.map((b) => ({
+        segment: String(b.segment).trim(),
+        year: Number(b.year),
+      }));
+      studentQuery = { institute_id: instituteId, is_active: { $ne: false }, $or: batchConditions };
+    }
+
+    if (studentQuery) {
+      Student.find(studentQuery)
+        .select("_id")
+        .lean()
+        .then((students) => {
+          if (students && students.length > 0) {
+            const recipientIds = students.map((s) => s._id);
+            NotificationService.createBulkNotifications(recipientIds, {
+              institute_id: instituteId,
+              title: `New Task Assigned: ${task.title}`,
+              description: task.instructions || task.description || "A new task has been assigned to your batch.",
+              category: "task",
+              type: "Task",
+              priority: "Incomplete",
+              action_url: `/dashboard/topics?courseId=${task.course_id}&type=task`,
+              action_label: "View Task",
+              meta_data: { task_id: task._id },
+            });
+          }
+        })
+        .catch((err) => console.error("[taskController] Notification error on create:", err));
+    }
+  }
 
   return sendResponse(res, 201, true, "Task created successfully.", task);
 });
@@ -377,7 +415,7 @@ const getSubmissions = asyncHandler(async (req, res) => {
     _id: req.params.id,
     institute_id: req.institute._id,
     is_deleted: false,
-  }).select("_id course_id");
+  }).select("_id course_id target student_ids assigned_batches");
   if (!task) return sendError(res, 404, false, "Task not found.");
 
   if (req.teacher) {
@@ -393,14 +431,156 @@ const getSubmissions = asyncHandler(async (req, res) => {
   }
 
   const submissions = await TaskSubmission.find({ task_id: task._id })
-    .populate("student_id", "full_name enrollment_no")
+    .populate("student_id", "full_name enrollment_no roll_no segment year email")
     .sort({ createdAt: -1 })
     .lean();
+
+  // Find all students assigned/eligible for this task
+  const submittedStudentIds = submissions
+    .map((s) => s.student_id?._id?.toString() || s.student_id?.toString())
+    .filter(Boolean);
+
+  let assignedStudentQuery = {
+    institute_id: req.institute._id,
+    is_active: { $ne: false },
+    status: { $ne: "suspended" },
+  };
+
+  if (task.target === "selected") {
+    assignedStudentQuery._id = { $in: task.student_ids || [] };
+  } else {
+    assignedStudentQuery.purchased_courses = task.course_id;
+    if (Array.isArray(task.assigned_batches) && task.assigned_batches.length > 0) {
+      const batchConditions = task.assigned_batches.map((b) => ({
+        segment: String(b.segment).trim(),
+        year: Number(b.year),
+      }));
+      assignedStudentQuery.$or = batchConditions;
+    }
+  }
+
+  if (req.teacher) {
+    const teacherScope = buildTeacherStudentScope(req.teacher);
+    if (teacherScope) {
+      assignedStudentQuery = { $and: [assignedStudentQuery, teacherScope] };
+    }
+  }
+
+  const allAssignedStudents = await Student.find(assignedStudentQuery)
+    .select("_id full_name enrollment_no roll_no segment year email")
+    .sort({ full_name: 1 })
+    .lean();
+
+  const submittedStudentIdSet = new Set(submittedStudentIds);
+  const unsubmitted = allAssignedStudents.filter(
+    (student) => !submittedStudentIdSet.has(student._id.toString())
+  );
 
   return sendResponse(res, 200, true, "Submissions fetched successfully.", {
     total: submissions.length,
     submissions,
+    unsubmitted,
+    unsubmittedCount: unsubmitted.length,
+    totalAssigned: allAssignedStudents.length,
   });
+});
+
+// POST /task/:id/notify-unsubmitted — send reminder notification to unsubmitted students
+const notifyUnsubmitted = asyncHandler(async (req, res) => {
+  const task = await Task.findOne({
+    _id: req.params.id,
+    institute_id: req.institute._id,
+    is_deleted: false,
+  }).select("_id title course_id target student_ids assigned_batches due_date");
+  if (!task) return sendError(res, 404, false, "Task not found.");
+
+  if (req.teacher) {
+    const allowedCourseIds = await getTeacherAssignedCourseIds(req.teacher);
+    if (!isCourseAllowed(task.course_id, allowedCourseIds)) {
+      return sendError(
+        res,
+        403,
+        false,
+        "You do not have access to send notifications for this course.",
+      );
+    }
+  }
+
+  const submissions = await TaskSubmission.find({ task_id: task._id })
+    .select("student_id")
+    .lean();
+
+  const submittedStudentIds = submissions
+    .map((s) => s.student_id?.toString())
+    .filter(Boolean);
+
+  let assignedStudentQuery = {
+    institute_id: req.institute._id,
+    is_active: { $ne: false },
+    status: { $ne: "suspended" },
+  };
+
+  if (task.target === "selected") {
+    assignedStudentQuery._id = { $in: task.student_ids || [] };
+  } else {
+    assignedStudentQuery.purchased_courses = task.course_id;
+    if (Array.isArray(task.assigned_batches) && task.assigned_batches.length > 0) {
+      const batchConditions = task.assigned_batches.map((b) => ({
+        segment: String(b.segment).trim(),
+        year: Number(b.year),
+      }));
+      assignedStudentQuery.$or = batchConditions;
+    }
+  }
+
+  if (req.teacher) {
+    const teacherScope = buildTeacherStudentScope(req.teacher);
+    if (teacherScope) {
+      assignedStudentQuery = { $and: [assignedStudentQuery, teacherScope] };
+    }
+  }
+
+  const allAssignedStudents = await Student.find(assignedStudentQuery)
+    .select("_id")
+    .lean();
+
+  const submittedStudentIdSet = new Set(submittedStudentIds);
+  const unsubmitted = allAssignedStudents.filter(
+    (student) => !submittedStudentIdSet.has(student._id.toString())
+  );
+
+  if (unsubmitted.length === 0) {
+    return sendResponse(res, 200, true, "All assigned students have already submitted this task.", {
+      notifiedCount: 0,
+    });
+  }
+
+  const recipientIds = unsubmitted.map((s) => s._id);
+  const dueDateStr = task.due_date ? ` (Due Date: ${new Date(task.due_date).toLocaleDateString()})` : "";
+
+  const created = await NotificationService.createBulkNotifications(recipientIds, {
+    institute_id: req.institute._id,
+    title: `Pending Task Reminder: ${task.title}`,
+    description: `You have not yet submitted the task "${task.title}"${dueDateStr}. Please complete and submit it soon.`,
+    category: "task",
+    type: "Task",
+    priority: "Incomplete",
+    action_url: `/dashboard/topics?courseId=${task.course_id}&type=task`,
+    action_label: "Open Task",
+    meta_data: { task_id: task._id, due_date: task.due_date },
+  });
+
+  if (!created || created.length === 0) {
+    return sendError(res, 500, false, "Failed to dispatch notifications to students.");
+  }
+
+  return sendResponse(
+    res,
+    200,
+    true,
+    `Notification reminder sent successfully to ${created.length} unsubmitted student(s).`,
+    { notifiedCount: created.length },
+  );
 });
 
 // PUT /task/:id/submissions/:submissionId — grade / feedback
@@ -436,6 +616,23 @@ const updateSubmission = asyncHandler(async (req, res) => {
   if (feedback !== undefined) submission.feedback = feedback;
 
   await submission.save();
+
+  // Trigger notification for student on task review/grade/resubmit
+  const isResubmit = status === "pending" || /resubmit|redo|noise|clear/i.test(feedback || "");
+  NotificationService.createNotification({
+    recipient_type: "student",
+    recipient_id: submission.student_id,
+    recipient_model: "Student",
+    institute_id: req.institute._id,
+    title: isResubmit ? `Task Resubmission Requested: ${task.title}` : `Task Graded: ${task.title}`,
+    description: feedback || (grade !== undefined ? `Your score: ${grade}` : `Task status updated to ${status}`),
+    category: "task",
+    type: "Task",
+    priority: isResubmit ? "Resubmit" : "Completed",
+    action_url: `/dashboard/topics?courseId=${task.course_id}&type=task`,
+    action_label: isResubmit ? "Resubmit Task" : "View Details",
+    meta_data: { task_id: task._id, submission_id: submission._id, grade, feedback, status: submission.status },
+  }).catch((err) => console.error("[taskController] Notification error on grade submission:", err));
 
   return sendResponse(res, 200, true, "Submission updated successfully.", submission);
 });
@@ -499,6 +696,7 @@ const assign = asyncHandler(async (req, res) => {
     }
   }
 
+  const newlyAssignedBatches = [];
   for (const item of rawList) {
     const segment = String(item.segment).trim();
     const year = Number(item.year);
@@ -507,10 +705,43 @@ const assign = asyncHandler(async (req, res) => {
     );
     if (!alreadyAssigned) {
       task.assigned_batches.push({ segment, year });
+      newlyAssignedBatches.push({ segment, year });
     }
   }
 
   await task.save();
+
+  // Trigger notifications for students in newly assigned batches
+  if (newlyAssignedBatches.length > 0) {
+    const batchConditions = newlyAssignedBatches.map((b) => ({
+      segment: b.segment,
+      year: b.year,
+    }));
+    Student.find({
+      institute_id: req.institute._id,
+      is_active: { $ne: false },
+      $or: batchConditions,
+    })
+      .select("_id")
+      .lean()
+      .then((students) => {
+        if (students && students.length > 0) {
+          const studentIds = students.map((s) => s._id);
+          NotificationService.createBulkNotifications(studentIds, {
+            institute_id: req.institute._id,
+            title: `New Task Assigned: ${task.title}`,
+            description: task.instructions || task.description || "A new task has been assigned to your batch.",
+            category: "task",
+            type: "Task",
+            priority: "Incomplete",
+            action_url: `/dashboard/topics?courseId=${task.course_id}&type=task`,
+            action_label: "View Task",
+            meta_data: { task_id: task._id },
+          });
+        }
+      })
+      .catch((err) => console.error("[taskController] Notification error on assign:", err));
+  }
 
   return sendResponse(res, 200, true, "Task assigned successfully.", task);
 });
@@ -785,4 +1016,5 @@ module.exports = {
   getMine,
   getOneMine,
   submitMine,
+  notifyUnsubmitted,
 };
