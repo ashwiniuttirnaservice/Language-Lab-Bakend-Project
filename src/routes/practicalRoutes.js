@@ -28,6 +28,7 @@ const {
   getMine,
   getOneMine,
   submitMine,
+  notifyUnsubmitted,
 } = require("../controller/practicalController");
 
 // Parse questions/answers from JSON string → array (sent as a multipart
@@ -94,6 +95,7 @@ router.put(
   update,
 );
 router.put("/:id/assign", validateSchema(assignPracticalSchema), assign);
+router.post("/:id/notify-unsubmitted", notifyUnsubmitted);
 router.get("/:id/submissions", getSubmissions);
 router.put(
   "/:id/submissions/:submissionId",

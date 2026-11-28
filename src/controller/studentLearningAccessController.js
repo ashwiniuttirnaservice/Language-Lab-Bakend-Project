@@ -12,6 +12,7 @@ const ExerciseModule = require("../models/ExerciseModule");
 const VocabularyModule = require("../models/VocabularyModule");
 const asyncHandler = require("../middlewares/asyncHandler");
 const { sendResponse, sendError } = require("../utils/apiResponse");
+const NotificationService = require("../service/notificationService");
 
 // Every video/audio/text/exercise/vocabulary module document IS one lesson —
 // there's no separate "lessons" field to read (see the models). So a
@@ -105,6 +106,33 @@ const create = asyncHandler(async (req, res) => {
     segment,
     year,
   });
+
+  // Notify all students in this allocated batch (segment + year)
+  Student.find({
+    institute_id: req.institute._id,
+    segment: segment,
+    year: year,
+    is_active: { $ne: false },
+  })
+    .select("_id")
+    .lean()
+    .then((students) => {
+      if (students && students.length > 0) {
+        const studentIds = students.map((s) => s._id);
+        NotificationService.createBulkNotifications(studentIds, {
+          institute_id: req.institute._id,
+          title: "New Curriculum Content Allocated",
+          description: "New learning topics and lessons have been unlocked for your batch.",
+          category: "text",
+          type: "Text",
+          priority: "Incomplete",
+          action_url: `/dashboard/topics?courseId=${course_id}`,
+          action_label: "Start Learning",
+          meta_data: { course_id, topic_id, subtopic_ids, segment, year },
+        });
+      }
+    })
+    .catch((err) => console.error("[studentLearningAccess] Notification error:", err));
 
   return sendResponse(res, 201, true, "Student learning access configured successfully.", access);
 });

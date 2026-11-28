@@ -8,7 +8,8 @@ const Student = require("../models/Student");
 const asyncHandler = require("../middlewares/asyncHandler");
 const { isBatchAllowed } = require("../utils/teacherAccess");
 const { sendResponse, sendError } = require("../utils/apiResponse");
-const { getTeacherAssignedCourseIds, isCourseAllowed } = require("../utils/teacherAccess");
+const { getTeacherAssignedCourseIds, isCourseAllowed, buildTeacherStudentScope } = require("../utils/teacherAccess");
+const NotificationService = require("../service/notificationService");
 const VoskSpeechService = require("../service/voskSpeechService");
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -410,20 +411,183 @@ const getSubmissions = asyncHandler(async (req, res) => {
     return sendError(res, 404, false, "Interactive task not found.");
   }
 
+  if (req.teacher) {
+    const allowedCourseIds = await getTeacherAssignedCourseIds(req.teacher);
+    if (!isCourseAllowed(task.course_id, allowedCourseIds)) {
+      return sendError(
+        res,
+        403,
+        false,
+        "You do not have access to submissions for this course.",
+      );
+    }
+  }
+
   const submissions = await InteractiveSubmission.find({
     task_id: task._id,
     institute_id: req.institute._id,
   })
-    .populate("student_id", "name roll_no enrollment_no segment year email")
+    .populate("student_id", "full_name name roll_no enrollment_no segment year email")
     .sort({ createdAt: -1 })
     .lean();
+
+  const submittedStudentIds = submissions
+    .map((s) => s.student_id?._id?.toString() || s.student_id?.toString())
+    .filter(Boolean);
+
+  let assignedStudentQuery = {
+    institute_id: req.institute._id,
+    is_active: { $ne: false },
+    status: { $ne: "suspended" },
+    purchased_courses: task.course_id,
+  };
+
+  if (Array.isArray(task.assigned_batches) && task.assigned_batches.length > 0) {
+    const batchConditions = task.assigned_batches.map((b) => ({
+      segment: String(b.segment).trim(),
+      year: Number(b.year),
+    }));
+    assignedStudentQuery.$or = batchConditions;
+  } else if (task.assigned_department) {
+    assignedStudentQuery.segment = task.assigned_department.trim();
+    if (task.assigned_batch) {
+      assignedStudentQuery.year = Number(task.assigned_batch);
+    }
+  }
+
+  if (req.teacher) {
+    const teacherScope = buildTeacherStudentScope(req.teacher);
+    if (teacherScope) {
+      assignedStudentQuery = { $and: [assignedStudentQuery, teacherScope] };
+    }
+  }
+
+  const allAssignedStudents = await Student.find(assignedStudentQuery)
+    .select("_id full_name enrollment_no roll_no segment year email")
+    .sort({ full_name: 1 })
+    .lean();
+
+  const submittedStudentIdSet = new Set(submittedStudentIds);
+  const unsubmitted = allAssignedStudents.filter(
+    (student) => !submittedStudentIdSet.has(student._id.toString())
+  );
 
   return sendResponse(
     res,
     200,
     true,
     "Student submissions fetched successfully.",
-    { submissions },
+    {
+      total: submissions.length,
+      submissions,
+      unsubmitted,
+      unsubmittedCount: unsubmitted.length,
+      totalAssigned: allAssignedStudents.length,
+    },
+  );
+});
+
+// POST /api/interactive-task/:id/notify-unsubmitted — send reminder notification to unsubmitted students
+const notifyUnsubmitted = asyncHandler(async (req, res) => {
+  const task = await InteractiveTask.findOne({
+    _id: req.params.id,
+    institute_id: req.institute._id,
+    is_deleted: false,
+  });
+
+  if (!task) {
+    return sendError(res, 404, false, "Interactive task not found.");
+  }
+
+  if (req.teacher) {
+    const allowedCourseIds = await getTeacherAssignedCourseIds(req.teacher);
+    if (!isCourseAllowed(task.course_id, allowedCourseIds)) {
+      return sendError(
+        res,
+        403,
+        false,
+        "You do not have access to send notifications for this course.",
+      );
+    }
+  }
+
+  const submissions = await InteractiveSubmission.find({
+    task_id: task._id,
+    institute_id: req.institute._id,
+  })
+    .select("student_id")
+    .lean();
+
+  const submittedStudentIds = submissions
+    .map((s) => s.student_id?.toString())
+    .filter(Boolean);
+
+  let assignedStudentQuery = {
+    institute_id: req.institute._id,
+    is_active: { $ne: false },
+    status: { $ne: "suspended" },
+    purchased_courses: task.course_id,
+  };
+
+  if (Array.isArray(task.assigned_batches) && task.assigned_batches.length > 0) {
+    const batchConditions = task.assigned_batches.map((b) => ({
+      segment: String(b.segment).trim(),
+      year: Number(b.year),
+    }));
+    assignedStudentQuery.$or = batchConditions;
+  } else if (task.assigned_department) {
+    assignedStudentQuery.segment = task.assigned_department.trim();
+    if (task.assigned_batch) {
+      assignedStudentQuery.year = Number(task.assigned_batch);
+    }
+  }
+
+  if (req.teacher) {
+    const teacherScope = buildTeacherStudentScope(req.teacher);
+    if (teacherScope) {
+      assignedStudentQuery = { $and: [assignedStudentQuery, teacherScope] };
+    }
+  }
+
+  const allAssignedStudents = await Student.find(assignedStudentQuery)
+    .select("_id")
+    .lean();
+
+  const submittedStudentIdSet = new Set(submittedStudentIds);
+  const unsubmitted = allAssignedStudents.filter(
+    (student) => !submittedStudentIdSet.has(student._id.toString())
+  );
+
+  if (unsubmitted.length === 0) {
+    return sendResponse(res, 200, true, "All assigned students have already completed this interactive speech task.", {
+      notifiedCount: 0,
+    });
+  }
+
+  const recipientIds = unsubmitted.map((s) => s._id);
+
+  const created = await NotificationService.createBulkNotifications(recipientIds, {
+    institute_id: req.institute._id,
+    title: `Speech Task Reminder: ${task.title}`,
+    description: `You have not yet completed the interactive speech task "${task.title}". Please record and submit your speech practice.`,
+    category: "audio",
+    type: "Audio",
+    priority: "Incomplete",
+    action_url: `/dashboard/topics?courseId=${task.course_id}&type=interactive`,
+    action_label: "Practice Speech",
+    meta_data: { task_id: task._id },
+  });
+
+  if (!created || created.length === 0) {
+    return sendError(res, 500, false, "Failed to dispatch notifications to students.");
+  }
+
+  return sendResponse(
+    res,
+    200,
+    true,
+    `Notification reminder sent successfully to ${created.length} unsubmitted student(s).`,
+    { notifiedCount: created.length },
   );
 });
 
@@ -671,5 +835,6 @@ module.exports = {
   getStudentTaskById,
   evaluateSpeech,
   submitSpeech,
+  notifyUnsubmitted,
 };
 
